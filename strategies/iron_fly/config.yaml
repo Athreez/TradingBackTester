@@ -1,4 +1,4 @@
-underlyings: [NIFTY]
+underlyings: [NIFTY, SENSEX]
 interval: 1minute      # candle interval the strategy runs on
 data_start: 2025-09-01 # NIFTY expiry -> Tue, SENSEX -> Thu from here; earlier data isn't comparable
 capital: 500000
@@ -21,9 +21,9 @@ params:
     NIFTY:
       days: [MON, TUE, WED, THU, FRI]
       hedge_distance: 400    # buy ATM+400 CE and ATM-400 PE
-      lots: 5
+      lots: 1
     # SENSEX dropped: lost money even before charges in the Sep-2025..Oct-2026 backtest.
     # SENSEX:
     #   days: [WED, THU]
     #   hedge_distance: 1000
-    #   lots: 5
+    #   lots: 1

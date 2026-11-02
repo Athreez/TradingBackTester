@@ -4,7 +4,7 @@ Intraday iron fly on the nearest weekly expiry. Parameters live in `config.yaml`
 
 | Day          | Underlying | Hedge distance | Lots |
 |--------------|------------|----------------|------|
-| Mon - Fri    | NIFTY      | ATM +/- 400    | 5    |
+| Mon - Fri    | NIFTY      | ATM +/- 400    | 1    |
 
 SENSEX (Wed/Thu, ATM +/- 1000) is supported but disabled in `config.yaml`.
 
