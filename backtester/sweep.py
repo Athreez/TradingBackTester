@@ -3,6 +3,8 @@
 Usage:
   python -m backtester.sweep --strategy vix_iron_fly --from 2025-09-01 --to 2026-10-30 \
       --param stop_loss_pct=30,40,50,60 [--set skip_expiry_day=false] [--label name]
+  python -m backtester.sweep ... --param schedule.NIFTY.lots,schedule.SENSEX.lots=1,2,5
+      (several comma-separated keys before '=' all get the same value)
 
 Prints a comparison table and saves it to reports/sweep_<strategy>_<timestamp>_<label>.csv.
 """
@@ -32,13 +34,13 @@ def daily_net(result) -> pd.Series:
 
 def _run_one(job: tuple) -> dict:
     strategy, start, end, overrides, key, value = job
-    result = run_backtest(strategy, start, end, overrides={**overrides, key: value})
+    result = run_backtest(strategy, start, end, overrides={**overrides, **{k: value for k in key.split(",")}})
     s = summarize(result)
     daily = daily_net(result)
     by_dow = daily.groupby(pd.to_datetime(daily.index).day_name().str[:3]).sum()
     monthly = daily.groupby(pd.to_datetime(daily.index).to_period("M")).sum()
     return {
-        key: value,
+        key.split(",")[0].split(".")[-1]: value,
         "net_pnl": s["net_pnl"],
         "charges": s["total_charges"],
         "max_dd": s["max_drawdown"],
