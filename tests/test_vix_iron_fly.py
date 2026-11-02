@@ -8,6 +8,8 @@ from data.store import DataStore
 
 DAY = "2025-09-08"  # Monday -> NIFTY
 EXPIRY = date(2025, 9, 9)
+# Fixed 50% SL and no VIX gating, so these tests don't depend on config.yaml defaults.
+BASE = {"vix_regimes": [], "stop_loss_pct": 50, "skip_expiry_day": False, "vix_min": None, "vix_max": None}
 SYMS = {
     ("CE", 24000): "NIFTY25SEP0924000CE", ("PE", 24000): "NIFTY25SEP0924000PE",
     ("CE", 24400): "NIFTY25SEP0924400CE", ("PE", 23600): "NIFTY25SEP0923600PE",
@@ -54,8 +56,8 @@ def store(tmp_path):
 
 
 def test_exit_side_on_stop_loss(store):
-    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
-                          overrides={"on_stop_loss": "exit_side"})
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "on_stop_loss": "exit_side"})
     fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
     at = lambda hm: datetime.fromisoformat(f"{DAY} {hm}")
 
@@ -79,8 +81,8 @@ def test_exit_side_on_stop_loss(store):
 
 
 def test_exit_all_on_stop_loss(store):
-    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
-                          overrides={"on_stop_loss": "exit_all"})
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "on_stop_loss": "exit_all"})
     fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
     at = lambda hm: datetime.fromisoformat(f"{DAY} {hm}")
 
@@ -97,8 +99,8 @@ def test_exit_all_on_stop_loss(store):
 def test_skip_expiry_day(store, skip, expected_fills):
     # Make the trading day itself the nearest expiry.
     store.save_contracts("NIFTY", date(2025, 9, 8), store.load_contracts("NIFTY", EXPIRY))
-    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
-                          overrides={"skip_expiry_day": skip, "on_stop_loss": "exit_side"})
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "skip_expiry_day": skip, "on_stop_loss": "exit_side"})
     assert len(result.fills) == expected_fills
 
 
@@ -107,13 +109,13 @@ def test_skip_expiry_day(store, skip, expected_fills):
 ])
 def test_vix_filter(store, vix_min, vix_max, expected_fills):
     store.save_candles("1minute", "NSE", "INDIAVIX", _day(flat(15.0)))
-    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
-                          overrides={"vix_min": vix_min, "vix_max": vix_max, "on_stop_loss": "exit_side"})
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "vix_min": vix_min, "vix_max": vix_max, "on_stop_loss": "exit_side"})
     assert len(result.fills) == expected_fills
 
 
 def test_vix_filter_without_vix_data_skips_day(store):
-    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store, overrides={"vix_min": 10})
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store, overrides={**BASE, "vix_min": 10})
     assert result.fills == []
 
 
@@ -121,8 +123,8 @@ def test_vix_filter_without_vix_data_skips_day(store):
 def test_vix_regimes(store, vix, expected_sl_pct):
     store.save_candles("1minute", "NSE", "INDIAVIX", _day(flat(vix)))
     regimes = [{"vix_below": 11, "stop_loss_pct": 40}, {"vix_above": 14, "stop_loss_pct": 30}]
-    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
-                          overrides={"vix_regimes": regimes, "on_stop_loss": "exit_side"})
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "vix_regimes": regimes, "on_stop_loss": "exit_side"})
     if expected_sl_pct is None:
         assert result.fills == []
         return

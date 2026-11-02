@@ -1,7 +1,7 @@
 """Run one strategy across a range of values for a single param, in parallel.
 
 Usage:
-  python -m backtester.sweep --strategy iron_fly --from 2025-09-01 --to 2026-10-30 \
+  python -m backtester.sweep --strategy vix_iron_fly --from 2025-09-01 --to 2026-10-30 \
       --param stop_loss_pct=30,40,50,60 [--set skip_expiry_day=false] [--label name]
 
 Prints a comparison table and saves it to reports/sweep_<strategy>_<timestamp>_<label>.csv.

@@ -10,7 +10,7 @@ import io
 import logging
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 import pandas as pd
@@ -52,7 +52,12 @@ class _RateLimiter:
             self._next = max(now, self._next) + self._interval
 
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
 def _ms(dt: datetime) -> int:
+    if dt.tzinfo is None:  # all internal times are naive IST, independent of this PC's timezone
+        dt = dt.replace(tzinfo=IST)
     return int(dt.timestamp() * 1000)
 
 
@@ -78,7 +83,6 @@ class IndMoneyClient:
         self._session.headers["Authorization"] = token_provider(False).get()
         self._limiter = _RateLimiter(requests_per_second)
         self._max_retries = max_retries
-        self._refreshed = False
 
     @classmethod
     def from_env(cls, **kwargs) -> "IndMoneyClient":
@@ -88,6 +92,9 @@ class IndMoneyClient:
     # ---- plumbing -------------------------------------------------------
 
     def _get(self, path: str, params: dict | None = None) -> requests.Response:
+        # Long-running bots: pick up the daily token (provider returns the cached one until it expires).
+        self._session.headers["Authorization"] = self._token_provider(False).get()
+        refreshed = False
         for attempt in range(self._max_retries):
             self._limiter.wait()
             resp = self._session.get(BASE_URL + path, params=params, timeout=30)
@@ -97,12 +104,12 @@ class IndMoneyClient:
                 time.sleep(delay)
                 continue
             if _is_auth_failure(resp):
-                if self._refreshed:  # refresh at most once per client, never loop on token generation
+                if refreshed:  # refresh at most once per request, never loop on token generation
                     raise IndMoneyError(f"Unauthorized (HTTP {resp.status_code}) even after refreshing the token: "
                                         f"{resp.text[:300]}")
                 log.warning("Access token rejected (HTTP %s); refreshing", resp.status_code)
                 self._session.headers["Authorization"] = self._token_provider(True).get()
-                self._refreshed = True
+                refreshed = True
                 continue
             if not resp.ok:
                 raise IndMoneyError(f"GET {path} failed: HTTP {resp.status_code}: {resp.text[:500]}")

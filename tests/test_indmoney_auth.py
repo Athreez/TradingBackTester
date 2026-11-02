@@ -68,13 +68,21 @@ def test_generation_failure_raises_without_retry(totp_env, monkeypatch, tmp_path
     assert len(calls) == 1
 
 
+class FakeProvider:
+    """Returns the current token; force=True rotates to a new one (like TOTP regeneration)."""
+
+    def __init__(self):
+        self.n, self.forced = 1, 0
+
+    def __call__(self, force):
+        if force:
+            self.n += 1
+            self.forced += 1
+        return auth.Secret(f"tok{self.n}")
+
+
 def test_client_refreshes_token_once_on_401(monkeypatch):
-    issued = []
-
-    def provider(force):
-        issued.append(force)
-        return auth.Secret(f"tok{len(issued)}")
-
+    provider = FakeProvider()
     client = IndMoneyClient(provider, requests_per_second=1000)
     seen = []
 
@@ -84,4 +92,26 @@ def test_client_refreshes_token_once_on_401(monkeypatch):
 
     monkeypatch.setattr(client._session, "get", fake_get)
     assert client._json("/user/profile") == {"ok": 1}
-    assert issued == [False, True] and seen == ["tok1", "tok2"]
+    assert provider.forced == 1 and seen == ["tok1", "tok2"]
+
+
+def test_client_gives_up_after_one_refresh_per_request(monkeypatch):
+    provider = FakeProvider()
+    client = IndMoneyClient(provider, requests_per_second=1000)
+    monkeypatch.setattr(client._session, "get", lambda *a, **k: FakeResp(401, {}))
+    with pytest.raises(Exception, match="even after refreshing"):
+        client._json("/user/profile")
+    assert provider.forced == 1
+
+
+def test_client_picks_up_rotated_token_on_later_requests(monkeypatch):
+    provider = FakeProvider()
+    client = IndMoneyClient(provider, requests_per_second=1000)
+    seen = []
+    monkeypatch.setattr(client._session, "get",
+                        lambda *a, **k: seen.append(client._session.headers["Authorization"])
+                        or FakeResp(200, {"data": {}}))
+    client._json("/a")
+    provider.n = 7  # e.g. the cached token was regenerated after 7 AM by another process
+    client._json("/b")
+    assert seen == ["tok1", "tok7"]

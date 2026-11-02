@@ -36,10 +36,25 @@ python -m data.downloader token --new    # TOTP login; later runs reuse/refresh 
 python -m data.downloader check
 python -m data.downloader options --underlying NIFTY --from 2025-09-01 --to 2025-09-30 --interval 1minute
 python -m backtester.run --list
-python -m backtester.run --strategy iron_fly --from 2025-09-01 --to 2025-09-30
-python -m backtester.sweep --strategy iron_fly --from 2025-09-01 --to 2026-10-30 --param stop_loss_pct=30,40,50
+python -m backtester.run --strategy vix_iron_fly --from 2025-09-01 --to 2025-09-30
+python -m backtester.sweep --strategy vix_iron_fly --from 2025-09-01 --to 2026-10-30 --param stop_loss_pct=30,40,50
 pytest
 ```
+
+## Paper trading
+
+```sh
+copy paper_trader\.env.example paper_trader\.env   # STRATEGY=vix_iron_fly, CAPITAL=500000
+python -m paper_trader.runner          # runs every trading day until Ctrl+C
+python -m paper_trader.runner --once   # just today's session
+```
+
+The bot polls INDmoney 1-minute candles and runs the same engine step as the
+backtester (`backtester.engine.run_bar`): orders fill at the next candle's open,
+SL-M stops trigger on candle highs. Output goes to `paper_trader/logs/`
+(`fills.csv`, `daily.csv`, `equity.csv`, a log per day). State is saved after
+every bar, so a restart resumes open positions and stop-losses instead of
+re-entering; only one bot can run at a time.
 
 ## Adding a strategy
 

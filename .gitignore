@@ -38,3 +38,9 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ---- Paper / live bot runtime output ----
+paper_trader/logs/
+paper_trader/state/
+live_trader/logs/
+live_trader/state/

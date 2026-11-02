@@ -1,4 +1,4 @@
-"""Intraday iron fly on the nearest weekly expiry.
+"""Intraday iron fly on the nearest weekly expiry, gated by India VIX (see README.md).
 
 At entry_time: buy hedges at ATM +/- hedge_distance, sell ATM CE + PE.
 Each short leg gets a stop-loss at entry * (1 + stop_loss_pct/100). When one
@@ -24,7 +24,7 @@ def _matches(regime: dict, vix: float) -> bool:
     return (below is None or vix < below) and (above is None or vix > above)
 
 
-class IronFly(Strategy):
+class VixIronFly(Strategy):
     def __init__(self, params):
         super().__init__(params)
         self.entry_time = time.fromisoformat(params["entry_time"])
