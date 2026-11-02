@@ -1,7 +1,7 @@
 """Thin wrapper over the INDstocks (INDmoney) REST API -- market data only.
 
 Docs: https://api-docs.indstocks.com
-Auth: raw access token in the `Authorization` header (valid until 7 AM next morning).
+Auth: raw access token in the `Authorization` header (see data/indmoney_auth.py).
 Rate limit for data APIs: 5 req/s, 100k/day -> we stay under with a client-side limiter.
 """
 from __future__ import annotations
@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 from datetime import date, datetime, timedelta
+from typing import Callable
 
 import pandas as pd
 import requests
@@ -63,12 +64,26 @@ def _candles_to_df(candles: list[dict] | None) -> pd.DataFrame:
     return df.set_index("ts").sort_index()
 
 
+TokenProvider = Callable[[bool], Secret]  # force_new -> token
+
+
+def _is_auth_failure(resp: requests.Response) -> bool:
+    return resp.status_code == 401 or (resp.status_code == 403 and "token" in resp.text.lower())
+
+
 class IndMoneyClient:
-    def __init__(self, token: Secret, requests_per_second: float = 4.0, max_retries: int = 5):
+    def __init__(self, token_provider: TokenProvider, requests_per_second: float = 4.0, max_retries: int = 5):
+        self._token_provider = token_provider
         self._session = requests.Session()
-        self._session.headers["Authorization"] = token.get()
+        self._session.headers["Authorization"] = token_provider(False).get()
         self._limiter = _RateLimiter(requests_per_second)
         self._max_retries = max_retries
+        self._refreshed = False
+
+    @classmethod
+    def from_env(cls, **kwargs) -> "IndMoneyClient":
+        from data.indmoney_auth import get_token
+        return cls(lambda force: get_token(force_new=force), **kwargs)
 
     # ---- plumbing -------------------------------------------------------
 
@@ -81,8 +96,14 @@ class IndMoneyClient:
                 log.warning("%s -> HTTP %s, retrying in %ss", path, resp.status_code, delay)
                 time.sleep(delay)
                 continue
-            if resp.status_code == 401:
-                raise IndMoneyError("Unauthorized: INDMONEY_ACCESS_TOKEN is missing/expired (tokens expire at 7 AM daily; generate a new one).")
+            if _is_auth_failure(resp):
+                if self._refreshed:  # refresh at most once per client, never loop on token generation
+                    raise IndMoneyError(f"Unauthorized (HTTP {resp.status_code}) even after refreshing the token: "
+                                        f"{resp.text[:300]}")
+                log.warning("Access token rejected (HTTP %s); refreshing", resp.status_code)
+                self._session.headers["Authorization"] = self._token_provider(True).get()
+                self._refreshed = True
+                continue
             if not resp.ok:
                 raise IndMoneyError(f"GET {path} failed: HTTP {resp.status_code}: {resp.text[:500]}")
             return resp

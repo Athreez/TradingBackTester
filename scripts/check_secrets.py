@@ -10,12 +10,18 @@ import subprocess
 import sys
 from pathlib import PurePosixPath
 
-BLOCKED_NAMES = re.compile(r"(^|/)(\.env(\..*)?|.*\.env|.*\.pem|.*\.key|.*\.p12|token.*\.json|.*\.token)$")
+BLOCKED_NAMES = re.compile(
+    r"(^|/)(\.env(\..*)?|.*\.env|.*\.pem|.*\.key|.*\.p12|token.*\.json|.*_token\.json|.*\.token)$"
+    r"|(^|/)\.?secrets/")
 ALLOWED_NAMES = re.compile(r"(^|/)\.env\.example$")
 
+_CRED_NAME = r"(?i)\b\w*(token|secret|api_?key|password|passwd|mpin|totp)\w*['\"]?\s*[:=]\s*"
+# Config-like files: any value counts. Code: only quoted literals (so `token = get_token()` is fine).
+CONFIG_SUFFIXES = {".env", ".yaml", ".yml", ".json", ".toml", ".ini", ".cfg", ".txt", ".md", ".sh", ".example", ""}
+CRED_IN_CONFIG = re.compile(_CRED_NAME + r"['\"]?[A-Za-z0-9_\-./+]{12,}")
+CRED_IN_CODE = re.compile(_CRED_NAME + r"['\"][A-Za-z0-9_\-./+]{12,}['\"]")
+
 PATTERNS = [
-    ("credential assignment",
-     re.compile(r"(?i)\b\w*(token|secret|api_?key|password|passwd|mpin|totp)\w*\b\s*[:=]\s*['\"]?[A-Za-z0-9_\-./+]{12,}")),
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
     ("private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
 ]
@@ -39,8 +45,9 @@ def main() -> int:
         if BLOCKED_NAMES.search(posix) and not ALLOWED_NAMES.search(posix):
             problems.append(f"{path}: file type must never be committed")
             continue
+        cred = CRED_IN_CONFIG if PurePosixPath(posix).suffix.lower() in CONFIG_SUFFIXES else CRED_IN_CODE
         for lineno, line in enumerate(staged_content(path).splitlines(), 1):
-            for label, pattern in PATTERNS:
+            for label, pattern in [("credential assignment", cred), *PATTERNS]:
                 if pattern.search(line):
                     problems.append(f"{path}:{lineno}: possible {label}")
 

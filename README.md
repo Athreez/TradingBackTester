@@ -26,23 +26,24 @@ python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
 git config core.hooksPath .githooks   # enables the secret-scanning pre-commit hook
-copy .env.example .env            # then paste your INDmoney access token into .env
+copy .env.example .env            # then fill in INDMONEY_CLIENT_ID / MPIN / TOTP_SECRET
 ```
 
 ## Workflow
 
 ```sh
+python -m data.downloader token --new    # TOTP login; later runs reuse/refresh it automatically
 python -m data.downloader check
-python -m data.downloader options --underlying NIFTY --from 2025-01-01 --to 2025-03-31 --interval 1minute
+python -m data.downloader options --underlying NIFTY --from 2025-09-01 --to 2025-09-30 --interval 1minute
 python -m backtester.run --list
-python -m backtester.run --strategy triple_iron_fly --from 2025-01-01 --to 2025-03-31
+python -m backtester.run --strategy triple_iron_fly --from 2025-09-01 --to 2025-09-30
 pytest
 ```
 
 ## Adding a strategy
 
 Create `strategies/<name>/strategy.py` with one `Strategy` subclass, plus a
-`config.yaml` (`underlying`, `interval`, `capital`, `costs`, `params`). It is
+`config.yaml` (`underlyings`, `interval`, `capital`, `costs`, `params`). It is
 picked up automatically by the backtester and the bots (`STRATEGY=<name>`).
 
 Backtest semantics: `on_bar` sees the bar that just completed; orders placed
@@ -54,4 +55,7 @@ intrinsic value against the index close.
 - Credentials live only in `.env` files, which are git-ignored (`.env.example` files hold placeholders).
 - The pre-commit hook (`scripts/check_secrets.py`) blocks staged `.env`/key files and token-like values.
 - Wrap secrets with `core.config.secret()`; the value is masked in logs and reprs.
-- INDmoney tokens expire at 7 AM every morning; order placement additionally needs a whitelisted static IP.
+- INDmoney: with TOTP configured, tokens are generated automatically (cached in git-ignored
+  `.secrets/`, refreshed when expired or rejected). They expire at 7 AM; each new one revokes the
+  previous one; 5 bad TOTP codes lock generation for 15 min, so failures are never auto-retried.
+- Order placement additionally needs a whitelisted static IP.

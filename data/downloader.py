@@ -1,6 +1,7 @@
 """Pull historical data from INDmoney into the local cache.
 
 Usage:
+  python -m data.downloader token [--new]   # show token status / force a new TOTP token
   python -m data.downloader check
   python -m data.downloader index   --underlying NIFTY --from 2025-01-01 --to 2025-03-31 --interval 1minute
   python -m data.downloader options --underlying NIFTY --from 2025-01-01 --to 2025-03-31 --interval 1minute
@@ -15,7 +16,8 @@ import argparse
 import logging
 from datetime import date, datetime, time, timedelta
 
-from core.config import load_env, secret
+from core.config import load_env
+from data.indmoney_auth import generate_token, token_status, totp_configured
 from data.indmoney_client import IndMoneyClient
 from data.store import DataStore
 from data.underlyings import get_underlying
@@ -28,7 +30,7 @@ CONTRACTS_SEGMENT = "DERIVATIVE"
 
 def _client() -> IndMoneyClient:
     load_env()
-    return IndMoneyClient(secret("INDMONEY_ACCESS_TOKEN"))
+    return IndMoneyClient.from_env()
 
 
 def _index_code(client: IndMoneyClient, store: DataStore, underlying: str) -> str:
@@ -94,6 +96,8 @@ def download_options(client, store, underlying: str, start: date, end: date, int
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("token", help="show token status; --new generates a fresh TOTP token")
+    t.add_argument("--new", action="store_true")
     sub.add_parser("check", help="verify the access token works")
     for name in ("index", "options"):
         s = sub.add_parser(name)
@@ -107,6 +111,15 @@ def main() -> None:
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.cmd == "token":
+        load_env()
+        if args.new:
+            if not totp_configured():
+                raise SystemExit("TOTP not configured: set INDMONEY_CLIENT_ID, INDMONEY_MPIN, INDMONEY_TOTP_SECRET in .env")
+            generate_token()
+        print(token_status())
+        return
+
     client, store = _client(), DataStore()
 
     if args.cmd == "check":

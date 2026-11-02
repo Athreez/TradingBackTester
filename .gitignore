@@ -8,7 +8,9 @@
 *.key
 *.p12
 secrets/
+.secrets/
 token*.json
+*_token.json
 *.token
 
 # ---- Data & outputs (large / regenerable) ----
