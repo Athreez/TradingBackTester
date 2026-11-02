@@ -72,15 +72,17 @@ class SimBroker(Broker):
         return new_fills
 
     def settle(self, instrument: Instrument, price: float, ts: datetime) -> Fill | None:
-        """Close a position at a fixed price (e.g. intrinsic value at expiry). No brokerage."""
+        """Cash-settle a position at a fixed price (intrinsic value at expiry)."""
         pos = self._positions.get(instrument)
         if not pos or pos.quantity == 0:
             return None
-        side = Side.SELL if pos.quantity > 0 else Side.BUY
+        was_long = pos.quantity > 0
+        side = Side.SELL if was_long else Side.BUY
         order = Order(instrument, side, abs(pos.quantity), tag="expiry-settlement",
                       status=OrderStatus.FILLED, created_at=ts)
         self._orders.append(order)
-        return self._record_fill(order, price, ts, charges=0.0)
+        charges = self.costs.settlement_charges(was_long, order.quantity, price)
+        return self._record_fill(order, price, ts, charges=charges)
 
     def equity(self, mark: Callable[[Instrument], float | None]) -> float:
         value = self.cash
