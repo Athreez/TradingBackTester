@@ -55,6 +55,8 @@ class VixIronFly(Strategy):
         self.hedges: dict[OptionType, Instrument] = {}
         self.lots = 0
         self.day_sl_pct = self.sl_pct
+        self.day_vix: float | None = None
+        self.note = "no trade scheduled today" if self.today is None else "waiting for entry time"
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -68,12 +70,14 @@ class VixIronFly(Strategy):
         if self.state == "IDLE" and self.entry_time <= clock.time() < self.exit_time:
             if clock - datetime.combine(clock.date(), self.entry_time) > self.entry_window:
                 self.state = "DONE"  # session started late (e.g. Muhurat trading): no trade today
+                self.note = "session started after the entry window, no trade"
                 return
             self._enter(ctx)
         elif self.state == "OPEN" and clock.time() >= self.exit_time:
             ctx.cancel_all()
             ctx.square_off_all(tag="exit-time")
             self.state = "DONE"
+            self.note += f"; exited at {clock:%H:%M}"
 
     def on_fill(self, ctx: Context, fill: Fill) -> None:
         kind, _, side = fill.tag.partition(":")
@@ -81,6 +85,7 @@ class VixIronFly(Strategy):
             trigger = round(fill.price * (1 + self.day_sl_pct), 2)
             ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}")
         elif kind == "sl" and self.state == "OPEN":  # a 2nd SL in the same bar is already handled
+            self.note += f"; {side} stop-loss hit at {fill.ts:%H:%M}"
             if self.on_stop_loss == "exit_all":
                 ctx.cancel_all()
                 ctx.square_off_all(tag="sl-exit")
@@ -95,18 +100,21 @@ class VixIronFly(Strategy):
         self.state = "DONE"  # unless every leg is found below
 
         if self.vix_min is not None or self.vix_max is not None or self.vix_regimes:
-            vix = ctx.data.index_value("INDIAVIX")
+            vix = self.day_vix = ctx.data.index_value("INDIAVIX")
             if vix is None:
                 log.warning("%s: no India VIX data, skipping day", self._day)
+                self.note = "no India VIX data, no trade"
                 return
             if (self.vix_min is not None and vix < self.vix_min) or (self.vix_max is not None and vix > self.vix_max):
                 log.info("%s %s: VIX %.2f outside [%s, %s], no trade", self._day, underlying, vix,
                          self.vix_min, self.vix_max)
+                self.note = f"VIX {vix:.2f} outside [{self.vix_min}, {self.vix_max}], no trade"
                 return
             if self.vix_regimes:
                 regime = next((r for r in self.vix_regimes if _matches(r, vix)), None)
                 if regime is None:
                     log.info("%s %s: VIX %.2f matches no regime, no trade", self._day, underlying, vix)
+                    self.note = f"VIX {vix:.2f} is in the no-trade band, no trade"
                     return
                 self.day_sl_pct = float(regime["stop_loss_pct"]) / 100
 
@@ -114,14 +122,17 @@ class VixIronFly(Strategy):
         expiries = ctx.data.expiries(underlying)
         if spot is None or not expiries:
             log.warning("%s %s: no spot/expiry data, skipping day", self._day, underlying)
+            self.note = "no index/expiry data, no trade"
             return
         expiry = expiries[0]
         if self.skip_expiry_day and expiry == self._day:
             log.info("%s %s: expiry day, no trade", self._day, underlying)
+            self.note = "expiry day, no trade"
             return
         chain = ctx.data.option_chain(underlying, expiry)
         if not chain:
             log.warning("%s %s: empty option chain for %s, skipping day", self._day, underlying, expiry)
+            self.note = "empty option chain, no trade"
             return
 
         atm = min({i.strike for i in chain}, key=lambda s: abs(s - spot))
@@ -135,6 +146,7 @@ class VixIronFly(Strategy):
         missing = [k for k, v in legs.items() if v is None]
         if missing:
             log.warning("%s %s: strikes missing %s (atm %s), skipping day", self._day, underlying, missing, atm)
+            self.note = f"strikes missing {missing}, no trade"
             return
 
         self.lots = int(cfg["lots"])
@@ -145,4 +157,5 @@ class VixIronFly(Strategy):
         ctx.sell(legs["short_ce"], self.lots, tag="short:CE")
         ctx.sell(legs["short_pe"], self.lots, tag="short:PE")
         self.state = "OPEN"
+        self.note = f"entered: ATM {atm:.0f}, expiry {expiry}, SL {self.day_sl_pct:.0%}"
         log.info("%s %s: entered fly atm=%s spot=%.2f expiry=%s", self._day, underlying, atm, spot, expiry)

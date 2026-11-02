@@ -56,6 +56,17 @@ SL-M stops trigger on candle highs. Output goes to `paper_trader/logs/`
 every bar, so a restart resumes open positions and stop-losses instead of
 re-entering; only one bot can run at a time.
 
+### Dashboard
+
+```sh
+pip install -e ".[dashboard]"
+streamlit run paper_trader/dashboard.py     # or scriptsun_dashboard.cmd -> http://localhost:8501
+```
+
+Read-only view of the bot (never calls the broker API): bot health and token
+expiry, today's VIX / stop-loss rule / legs with live P&L and pending stops,
+fills, intraday equity, daily P&L history and the log tail. Refreshes every 5s.
+
 ## Adding a strategy
 
 Create `strategies/<name>/strategy.py` with one `Strategy` subclass, plus a

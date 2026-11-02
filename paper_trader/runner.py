@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import json
 import logging
 import os
 import pickle
@@ -36,6 +37,7 @@ from paper_trader.live_feed import LiveFeed, MemoryStore
 HERE = Path(__file__).parent
 LOG_DIR = HERE / "logs"
 STATE_PATH = HERE / "state" / "state.pkl"
+SNAPSHOT_PATH = HERE / "state" / "live.json"  # read by paper_trader/dashboard.py
 IST = timezone(timedelta(hours=5, minutes=30))
 SESSION_START, SESSION_END = time(9, 15), time(15, 30)
 PREPARE_AT, CLOSE_AT = time(9, 5), time(15, 35)
@@ -150,8 +152,11 @@ class PaperBot:
                     return
                 nxt = _next_session_day(today)
                 log.info("Next session %s; sleeping", nxt)
+                self._write_snapshot(None, f"idle until next session {nxt}")
                 _sleep_until(datetime.combine(nxt, PREPARE_AT))
                 continue
+            if ist_now() < datetime.combine(today, PREPARE_AT):
+                self._write_snapshot(None, f"waiting for session start ({PREPARE_AT:%H:%M})")
             _sleep_until(datetime.combine(today, PREPARE_AT))
             self._run_day(today)
             if once:
@@ -192,6 +197,7 @@ class PaperBot:
                 self._log_new_fills()
                 _append_csv(LOG_DIR / "equity.csv", {"ts": ts, "equity": round(self.broker.equity(data.ltp), 2)})
                 self._save()
+            self._write_snapshot(data, "trading session")
             _pause(POLL_SECONDS)
 
         # End of day: settle anything expiring today, then report.
@@ -212,6 +218,51 @@ class PaperBot:
         log.info("=== %s closed: %s", today, row)
         self.day_closed = True
         self._save()
+        self._write_snapshot(data, "session closed")
+
+    def _write_snapshot(self, data: HistoricalMarketData | None, phase: str) -> None:
+        """Small JSON for the dashboard: positions with last prices, pending stops, day status."""
+        from data.indmoney_auth import CACHE_PATH, _read_cache
+
+        def ltp(inst):
+            if data is None or data._now is None:
+                return None
+            return data.ltp(inst)
+
+        positions = []
+        for inst, pos in self.broker.positions().items():
+            last = ltp(inst)
+            positions.append({"symbol": inst.symbol, "qty": pos.quantity, "avg_price": round(pos.avg_price, 2),
+                              "ltp": last, "unrealized": round(pos.unrealized_pnl(last), 2) if last else None})
+        orders = [{"symbol": o.instrument.symbol, "side": o.side.value, "type": o.order_type.value,
+                   "qty": o.quantity, "trigger": o.trigger_price, "limit": o.limit_price, "tag": o.tag}
+                  for o in self.broker.open_orders()]
+        st = self.strategy
+        today = getattr(st, "today", None)
+        token = _read_cache(CACHE_PATH)
+        snap = {
+            "updated_at": ist_now().isoformat(timespec="seconds"),
+            "phase": phase,
+            "strategy": self.strategy_name,
+            "day": str(self.day) if self.day else None,
+            "last_bar": self.last_bar.isoformat() if self.last_bar else None,
+            "underlying": today[0] if today else None,
+            "spot": (data.spot(today[0]) if data is not None and data._now is not None and today else None),
+            "vix_at_entry": getattr(st, "day_vix", None),
+            "day_sl_pct": getattr(st, "day_sl_pct", None),
+            "state": getattr(st, "state", None),
+            "note": getattr(st, "note", None),
+            "cash": round(self.broker.cash, 2),
+            "equity": round(self.broker.equity(ltp if data is not None else (lambda i: None)), 2),
+            "initial_capital": self.broker.initial_capital,
+            "positions": positions,
+            "open_orders": orders,
+            "token_valid_until": token[1].isoformat(timespec="minutes") if token else None,
+        }
+        SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SNAPSHOT_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(snap, indent=2, default=str))
+        tmp.replace(SNAPSHOT_PATH)
 
     def _log_new_fills(self) -> None:
         for f in self.broker.fills()[self._fills_logged:]:
