@@ -37,6 +37,7 @@ python -m data.downloader check
 python -m data.downloader options --underlying NIFTY --from 2025-09-01 --to 2025-09-30 --interval 1minute
 python -m backtester.run --list
 python -m backtester.run --strategy iron_fly --from 2025-09-01 --to 2025-09-30
+python -m backtester.sweep --strategy iron_fly --from 2025-09-01 --to 2026-10-30 --param stop_loss_pct=30,40,50
 pytest
 ```
 
