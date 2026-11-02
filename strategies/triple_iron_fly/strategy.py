@@ -8,7 +8,7 @@ Which underlying trades depends on the weekday (see config.yaml `schedule`).
 from __future__ import annotations
 
 import logging
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 
 from core.models import Fill, Instrument, OptionType
 from core.strategy_base import Context, Strategy
@@ -23,6 +23,7 @@ class TripleIronFly(Strategy):
         super().__init__(params)
         self.entry_time = time.fromisoformat(params["entry_time"])
         self.exit_time = time.fromisoformat(params["exit_time"])
+        self.entry_window = timedelta(minutes=int(params.get("entry_window_minutes", 5)))
         self.sl_pct = float(params["stop_loss_pct"]) / 100
         self.by_weekday: dict[int, tuple[str, dict]] = {}
         for underlying, cfg in params["schedule"].items():
@@ -49,6 +50,9 @@ class TripleIronFly(Strategy):
             return
 
         if self.state == "IDLE" and self.entry_time <= clock.time() < self.exit_time:
+            if clock - datetime.combine(clock.date(), self.entry_time) > self.entry_window:
+                self.state = "DONE"  # session started late (e.g. Muhurat trading): no trade today
+                return
             self._enter(ctx)
         elif self.state == "OPEN" and clock.time() >= self.exit_time:
             ctx.cancel_all()

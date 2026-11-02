@@ -10,6 +10,7 @@ costs:
 params:
   entry_time: "09:22"
   exit_time: "14:45"
+  entry_window_minutes: 5    # skip the day if no candle within 5 min of entry_time (special sessions)
   stop_loss_pct: 50          # per short leg: exit when premium rises 50% above sell price
   schedule:
     NIFTY:
