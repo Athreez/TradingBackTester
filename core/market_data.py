@@ -26,6 +26,10 @@ class MarketData(ABC):
         """Latest underlying index price (close of the latest completed bar)."""
 
     @abstractmethod
+    def index_value(self, name: str) -> float | None:
+        """Latest value of any index, incl. signal indices like INDIAVIX."""
+
+    @abstractmethod
     def expiries(self, underlying: str) -> list[date]:
         """Option expiries that are live as of now(), nearest first."""
 

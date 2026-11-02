@@ -43,3 +43,20 @@ def get_underlying(name: str) -> Underlying:
         return UNDERLYINGS[name.upper()]
     except KeyError:
         raise ValueError(f"Unknown underlying '{name}'. Known: {list(UNDERLYINGS)}") from None
+
+
+# Indices we download for signals but do not trade options on.
+SIGNAL_INDICES: dict[str, tuple[str, Exchange]] = {
+    "INDIAVIX": ("India VIX", Exchange.NSE),
+}
+
+
+def index_spec(name: str) -> tuple[str, Exchange]:
+    """(name in the INDstocks index master, exchange) for a tradable underlying or a signal index."""
+    key = name.upper()
+    if key in UNDERLYINGS:
+        u = UNDERLYINGS[key]
+        return u.index_name, u.index_exchange
+    if key in SIGNAL_INDICES:
+        return SIGNAL_INDICES[key]
+    raise ValueError(f"Unknown index '{name}'. Known: {list(UNDERLYINGS) + list(SIGNAL_INDICES)}")

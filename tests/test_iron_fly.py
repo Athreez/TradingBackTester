@@ -100,3 +100,18 @@ def test_skip_expiry_day(store, skip, expected_fills):
     result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
                           overrides={"skip_expiry_day": skip, "on_stop_loss": "exit_side"})
     assert len(result.fills) == expected_fills
+
+
+@pytest.mark.parametrize("vix_min, vix_max, expected_fills", [
+    (14, None, 8), (16, None, 0), (None, 14, 0), (None, 16, 8), (14, 16, 8),
+])
+def test_vix_filter(store, vix_min, vix_max, expected_fills):
+    store.save_candles("1minute", "NSE", "INDIAVIX", _day(flat(15.0)))
+    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={"vix_min": vix_min, "vix_max": vix_max, "on_stop_loss": "exit_side"})
+    assert len(result.fills) == expected_fills
+
+
+def test_vix_filter_without_vix_data_skips_day(store):
+    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store, overrides={"vix_min": 10})
+    assert result.fills == []

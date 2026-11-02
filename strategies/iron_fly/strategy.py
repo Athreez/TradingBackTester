@@ -27,6 +27,8 @@ class IronFly(Strategy):
         self.entry_window = timedelta(minutes=int(params.get("entry_window_minutes", 5)))
         self.sl_pct = float(params["stop_loss_pct"]) / 100
         self.skip_expiry_day = bool(params.get("skip_expiry_day", False))
+        self.vix_min = params.get("vix_min")  # trade only if India VIX at entry is within [vix_min, vix_max]
+        self.vix_max = params.get("vix_max")
         self.on_stop_loss = params.get("on_stop_loss", "exit_all")
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
@@ -82,6 +84,16 @@ class IronFly(Strategy):
     def _enter(self, ctx: Context) -> None:
         underlying, cfg = self.today
         self.state = "DONE"  # unless every leg is found below
+
+        if self.vix_min is not None or self.vix_max is not None:
+            vix = ctx.data.index_value("INDIAVIX")
+            if vix is None:
+                log.warning("%s: no India VIX data, skipping day", self._day)
+                return
+            if (self.vix_min is not None and vix < self.vix_min) or (self.vix_max is not None and vix > self.vix_max):
+                log.info("%s %s: VIX %.2f outside [%s, %s], no trade", self._day, underlying, vix,
+                         self.vix_min, self.vix_max)
+                return
 
         spot = ctx.data.spot(underlying)
         expiries = ctx.data.expiries(underlying)

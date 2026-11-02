@@ -3,7 +3,7 @@
 Usage:
   python -m data.downloader token [--new]   # show token status / force a new TOTP token
   python -m data.downloader check
-  python -m data.downloader index   --underlying NIFTY --from 2025-01-01 --to 2025-03-31 --interval 1minute
+  python -m data.downloader index   --underlying NIFTY|SENSEX|INDIAVIX --from 2025-01-01 --to 2025-03-31 --interval 1minute
   python -m data.downloader options --underlying NIFTY --from 2025-01-01 --to 2025-03-31 --interval 1minute
 
 `options` downloads, for every expired weekly expiry in the range, only the
@@ -20,7 +20,7 @@ from core.config import load_env
 from data.indmoney_auth import generate_token, token_status, totp_configured
 from data.indmoney_client import IndMoneyClient
 from data.store import DataStore
-from data.underlyings import get_underlying
+from data.underlyings import SIGNAL_INDICES, UNDERLYINGS, get_underlying, index_spec
 
 log = logging.getLogger("downloader")
 
@@ -36,15 +36,15 @@ def _client() -> IndMoneyClient:
 def _index_code(client: IndMoneyClient, store: DataStore, underlying: str) -> str:
     code = store.get_index_code(underlying)
     if code is None:
-        u = get_underlying(underlying)
-        code = client.index_scrip_code(u.index_name, u.index_exchange.value)
+        index_name, exchange = index_spec(underlying)
+        code = client.index_scrip_code(index_name, exchange.value)
         store.set_index_code(underlying, code)
         log.info("Resolved %s index scrip code: %s", underlying, code)
     return code
 
 
 def download_index(client, store, underlying: str, start: date, end: date, interval: str) -> None:
-    u = get_underlying(underlying)
+    _, exchange = index_spec(underlying)
     code = _index_code(client, store, underlying)
     frames = client.historical([code], interval, datetime.combine(start, time.min),
                                datetime.combine(end + timedelta(days=1), time.min))
@@ -52,7 +52,7 @@ def download_index(client, store, underlying: str, start: date, end: date, inter
     if df is None or df.empty:
         log.warning("No index candles returned for %s (%s)", underlying, code)
         return
-    store.save_candles(interval, u.index_exchange.value, underlying, df)
+    store.save_candles(interval, exchange.value, underlying, df)
     log.info("%s: saved %d index candles (%s -> %s)", underlying, len(df), df.index[0], df.index[-1])
 
 
@@ -101,7 +101,8 @@ def main() -> None:
     sub.add_parser("check", help="verify the access token works")
     for name in ("index", "options"):
         s = sub.add_parser(name)
-        s.add_argument("--underlying", required=True, choices=["NIFTY", "SENSEX"])
+        choices = list(UNDERLYINGS) + (list(SIGNAL_INDICES) if name == "index" else [])
+        s.add_argument("--underlying", required=True, choices=choices)
         s.add_argument("--from", dest="start", required=True, type=date.fromisoformat)
         s.add_argument("--to", dest="end", required=True, type=date.fromisoformat)
         s.add_argument("--interval", default="1minute")

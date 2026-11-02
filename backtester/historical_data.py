@@ -8,7 +8,7 @@ import pandas as pd
 from core.market_data import MarketData
 from core.models import Bar, Instrument, OptionType
 from data.store import DataStore
-from data.underlyings import get_underlying
+from data.underlyings import get_underlying, index_spec
 
 
 def _row_to_bar(ts, row) -> Bar:
@@ -50,16 +50,19 @@ class HistoricalMarketData(MarketData):
             self._frames[key] = self.store.load_candles(self.interval, exchange, symbol)
         return self._frames[key]
 
-    def index_frame(self, underlying: str) -> pd.DataFrame:
-        u = get_underlying(underlying)
-        return self._frame(u.index_exchange.value, u.name)
+    def index_frame(self, name: str) -> pd.DataFrame:
+        _, exchange = index_spec(name)
+        return self._frame(exchange.value, name.upper())
 
     # ---- MarketData -----------------------------------------------------
 
-    def spot(self, underlying: str) -> float | None:
-        df = self.index_frame(underlying)
+    def index_value(self, name: str) -> float | None:
+        df = self.index_frame(name)
         i = df.index.searchsorted(self.now(), side="right") - 1
         return float(df["close"].iloc[i]) if i >= 0 else None
+
+    def spot(self, underlying: str) -> float | None:
+        return self.index_value(underlying)
 
     def expiries(self, underlying: str) -> list[date]:
         today = self.now().date()
