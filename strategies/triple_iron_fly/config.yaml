@@ -1,4 +1,4 @@
-underlying: NIFTY      # NIFTY or SENSEX
+underlyings: [NIFTY, SENSEX]
 interval: 1minute      # candle interval the strategy runs on
 capital: 500000
 
@@ -6,5 +6,16 @@ capital: 500000
 costs:
   slippage: 0.0005
 
-# Strategy-specific parameters, passed to the strategy as self.params
-params: {}
+params:
+  entry_time: "09:22"
+  exit_time: "14:45"
+  stop_loss_pct: 50          # per short leg: exit when premium rises 50% above sell price
+  schedule:
+    NIFTY:
+      days: [MON, TUE, FRI]
+      hedge_distance: 400    # buy ATM+400 CE and ATM-400 PE
+      lots: 1
+    SENSEX:
+      days: [WED, THU]
+      hedge_distance: 1000
+      lots: 1

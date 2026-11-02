@@ -1,7 +1,7 @@
 """MarketData backed by the local Parquet cache, with a movable clock (no look-ahead)."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -32,6 +32,15 @@ class HistoricalMarketData(MarketData):
         if self._now is None:
             raise RuntimeError("clock not started")
         return self._now
+
+    def bar_end(self) -> datetime:
+        return self.now() + self._bar_length
+
+    @property
+    def _bar_length(self) -> timedelta:
+        if self.interval.endswith("minute"):
+            return timedelta(minutes=int(self.interval.removesuffix("minute")))
+        return timedelta(days=1)
 
     # ---- internals ------------------------------------------------------
 

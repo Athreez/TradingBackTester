@@ -26,6 +26,17 @@ class Context:
     def sell(self, instrument: Instrument, lots: int, limit: float | None = None, tag: str = "") -> Order:
         return self._order(instrument, Side.SELL, lots, limit, tag)
 
+    def stop_buy(self, instrument: Instrument, lots: int, trigger: float, tag: str = "") -> Order:
+        """Stop-loss market buy (e.g. SL for a short option): fires once price trades >= trigger."""
+        return self._order(instrument, Side.BUY, lots, None, tag, trigger)
+
+    def stop_sell(self, instrument: Instrument, lots: int, trigger: float, tag: str = "") -> Order:
+        return self._order(instrument, Side.SELL, lots, None, tag, trigger)
+
+    def cancel_all(self) -> None:
+        for order in self.broker.open_orders():
+            self.broker.cancel_order(order.id)
+
     def square_off_all(self, tag: str = "square-off") -> None:
         for inst, pos in self.broker.positions().items():
             if pos.quantity > 0:
@@ -33,13 +44,20 @@ class Context:
             elif pos.quantity < 0:
                 self.buy(inst, -pos.quantity // inst.lot_size, tag=tag)
 
-    def _order(self, instrument, side, lots, limit, tag) -> Order:
+    def _order(self, instrument, side, lots, limit, tag, trigger=None) -> Order:
+        if trigger is not None:
+            order_type = OrderType.STOP
+        elif limit is not None:
+            order_type = OrderType.LIMIT
+        else:
+            order_type = OrderType.MARKET
         order = Order(
             instrument=instrument,
             side=side,
             quantity=lots * instrument.lot_size,
-            order_type=OrderType.LIMIT if limit is not None else OrderType.MARKET,
+            order_type=order_type,
             limit_price=limit,
+            trigger_price=trigger,
             tag=tag,
             created_at=self.now,
         )

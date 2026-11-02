@@ -17,6 +17,10 @@ class MarketData(ABC):
     @abstractmethod
     def now(self) -> datetime: ...
 
+    def bar_end(self) -> datetime:
+        """Wall-clock time at which the current bar completed. Orders placed now fill at this time."""
+        return self.now()
+
     @abstractmethod
     def spot(self, underlying: str) -> float | None:
         """Latest underlying index price (close of the latest completed bar)."""

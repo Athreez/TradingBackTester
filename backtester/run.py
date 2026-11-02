@@ -24,12 +24,14 @@ def run_backtest(strategy_name: str, start: date, end: date, store: DataStore | 
                  capital: float | None = None):
     strategy, config = load_strategy(strategy_name)
     interval = config.get("interval", "1minute")
-    underlying = config["underlying"]
+    underlyings = config["underlyings"]
     capital = capital or float(config.get("capital", 500_000))
 
     data = HistoricalMarketData(store or DataStore(), interval)
-    index = data.index_frame(underlying)
-    timeline = [ts.to_pydatetime() for ts in index.loc[str(start):str(end)].index]
+    stamps = set()
+    for u in underlyings:
+        stamps.update(data.index_frame(u).loc[str(start):str(end)].index)
+    timeline = [ts.to_pydatetime() for ts in sorted(stamps)]
 
     broker = SimBroker(
         quote=lambda inst: data.bar_at(inst, data.now()),
@@ -37,7 +39,7 @@ def run_backtest(strategy_name: str, start: date, end: date, store: DataStore | 
         initial_capital=capital,
     )
     result = BacktestEngine(strategy, data, broker, timeline).run()
-    result.meta = {"strategy": strategy_name, "underlying": underlying, "interval": interval,
+    result.meta = {"strategy": strategy_name, "underlyings": underlyings, "interval": interval,
                    "params": strategy.params}
     return result
 

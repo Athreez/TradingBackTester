@@ -94,6 +94,13 @@ class SimBroker(Broker):
     def _match(self, order: Order, bar: Bar) -> float | None:
         if order.order_type is OrderType.MARKET:
             return self.costs.fill_price(order.side, bar.open)
+        if order.order_type is OrderType.STOP:
+            trigger = order.trigger_price
+            if order.side is Side.BUY and bar.high >= trigger:
+                return self.costs.fill_price(Side.BUY, max(bar.open, trigger))
+            if order.side is Side.SELL and bar.low <= trigger:
+                return self.costs.fill_price(Side.SELL, min(bar.open, trigger))
+            return None
         limit = order.limit_price
         if order.side is Side.BUY and bar.low <= limit:
             return min(bar.open, limit)

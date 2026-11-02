@@ -27,6 +27,7 @@ class Side(str, Enum):
 class OrderType(str, Enum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
+    STOP = "STOP"  # stop-loss market (Zerodha SL-M): becomes market once trigger_price trades
 
 
 class OrderStatus(str, Enum):
@@ -71,6 +72,7 @@ class Order:
     quantity: int  # units, not lots (lots * lot_size)
     order_type: OrderType = OrderType.MARKET
     limit_price: float | None = None
+    trigger_price: float | None = None  # for STOP orders
     tag: str = ""  # free text for the strategy, e.g. "fly1-short-ce"
     id: int = field(default_factory=lambda: next(_order_ids))
     status: OrderStatus = OrderStatus.PENDING

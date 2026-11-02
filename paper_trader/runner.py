@@ -16,7 +16,7 @@ def main() -> None:
     if not name:
         raise SystemExit("Set STRATEGY in paper_trader/.env (see paper_trader/.env.example)")
     strategy, config = load_strategy(name)
-    print(f"Loaded strategy '{name}' on {config.get('underlying')} ({config.get('interval')})")
+    print(f"Loaded strategy '{name}' on {config.get('underlyings')} ({config.get('interval')})")
     # TODO phase 2: LiveMarketData (INDmoney quotes/websocket) + SimBroker with live LTP quotes,
     # driving the same Context / Strategy lifecycle the backtester uses.
     raise NotImplementedError("Paper trading loop is built in phase 2")
