@@ -1,0 +1,11 @@
+underlying: NIFTY      # NIFTY or SENSEX
+interval: 1minute      # candle interval the strategy runs on
+capital: 500000
+
+# Overrides for core/costs.py CostModel (verify against current broker charges)
+costs:
+  brokerage_per_order: 20
+  slippage: 0.0005
+
+# Strategy-specific parameters, passed to the strategy as self.params
+params: {}

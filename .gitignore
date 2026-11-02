@@ -1,0 +1,38 @@
+# ---- SECRETS: never commit these ----
+.env
+*.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+secrets/
+token*.json
+*.token
+
+# ---- Data & outputs (large / regenerable) ----
+data/cache/*
+!data/cache/.gitkeep
+reports/*
+!reports/.gitkeep
+*.parquet
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

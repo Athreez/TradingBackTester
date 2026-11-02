@@ -1,0 +1,8 @@
+#!/bin/sh
+# Blocks commits containing secrets. Enable once per clone:
+#   git config core.hooksPath .githooks
+ROOT="$(git rev-parse --show-toplevel)"
+if [ -x "$ROOT/.venv/Scripts/python.exe" ]; then PY="$ROOT/.venv/Scripts/python.exe"
+elif [ -x "$ROOT/.venv/bin/python" ]; then PY="$ROOT/.venv/bin/python"
+else PY=python; fi
+exec "$PY" "$ROOT/scripts/check_secrets.py"
