@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 WEEKDAYS = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4}
 
 
+def _matches(regime: dict, vix: float) -> bool:
+    below, above = regime.get("vix_below"), regime.get("vix_above")
+    return (below is None or vix < below) and (above is None or vix > above)
+
+
 class IronFly(Strategy):
     def __init__(self, params):
         super().__init__(params)
@@ -29,6 +34,9 @@ class IronFly(Strategy):
         self.skip_expiry_day = bool(params.get("skip_expiry_day", False))
         self.vix_min = params.get("vix_min")  # trade only if India VIX at entry is within [vix_min, vix_max]
         self.vix_max = params.get("vix_max")
+        # Optional VIX regimes: first match sets the day's SL; no match -> no trade.
+        # e.g. [{vix_below: 11, stop_loss_pct: 40}, {vix_above: 14, stop_loss_pct: 30}]
+        self.vix_regimes = params.get("vix_regimes") or []
         self.on_stop_loss = params.get("on_stop_loss", "exit_all")
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
@@ -46,6 +54,7 @@ class IronFly(Strategy):
         self.today = self.by_weekday.get(today.weekday())  # (underlying, cfg) or None
         self.hedges: dict[OptionType, Instrument] = {}
         self.lots = 0
+        self.day_sl_pct = self.sl_pct
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -69,7 +78,7 @@ class IronFly(Strategy):
     def on_fill(self, ctx: Context, fill: Fill) -> None:
         kind, _, side = fill.tag.partition(":")
         if kind == "short":
-            trigger = round(fill.price * (1 + self.sl_pct), 2)
+            trigger = round(fill.price * (1 + self.day_sl_pct), 2)
             ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}")
         elif kind == "sl" and self.state == "OPEN":  # a 2nd SL in the same bar is already handled
             if self.on_stop_loss == "exit_all":
@@ -85,7 +94,7 @@ class IronFly(Strategy):
         underlying, cfg = self.today
         self.state = "DONE"  # unless every leg is found below
 
-        if self.vix_min is not None or self.vix_max is not None:
+        if self.vix_min is not None or self.vix_max is not None or self.vix_regimes:
             vix = ctx.data.index_value("INDIAVIX")
             if vix is None:
                 log.warning("%s: no India VIX data, skipping day", self._day)
@@ -94,6 +103,12 @@ class IronFly(Strategy):
                 log.info("%s %s: VIX %.2f outside [%s, %s], no trade", self._day, underlying, vix,
                          self.vix_min, self.vix_max)
                 return
+            if self.vix_regimes:
+                regime = next((r for r in self.vix_regimes if _matches(r, vix)), None)
+                if regime is None:
+                    log.info("%s %s: VIX %.2f matches no regime, no trade", self._day, underlying, vix)
+                    return
+                self.day_sl_pct = float(regime["stop_loss_pct"]) / 100
 
         spot = ctx.data.spot(underlying)
         expiries = ctx.data.expiries(underlying)

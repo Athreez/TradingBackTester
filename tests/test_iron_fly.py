@@ -115,3 +115,18 @@ def test_vix_filter(store, vix_min, vix_max, expected_fills):
 def test_vix_filter_without_vix_data_skips_day(store):
     result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store, overrides={"vix_min": 10})
     assert result.fills == []
+
+
+@pytest.mark.parametrize("vix, expected_sl_pct", [(10.0, 0.40), (15.0, 0.30), (12.0, None)])
+def test_vix_regimes(store, vix, expected_sl_pct):
+    store.save_candles("1minute", "NSE", "INDIAVIX", _day(flat(vix)))
+    regimes = [{"vix_below": 11, "stop_loss_pct": 40}, {"vix_above": 14, "stop_loss_pct": 30}]
+    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={"vix_regimes": regimes, "on_stop_loss": "exit_side"})
+    if expected_sl_pct is None:
+        assert result.fills == []
+        return
+    fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
+    short_ce = fills[("short:CE", "NIFTY25SEP0924000CE")].price
+    sl = fills[("sl:CE", "NIFTY25SEP0924000CE")]
+    assert sl.price == pytest.approx(round(short_ce * (1 + expected_sl_pct), 2) * 1.0005)

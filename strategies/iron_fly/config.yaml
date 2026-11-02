@@ -20,6 +20,11 @@ params:
   skip_expiry_day: true      # no trade on the underlying's own expiry day
   vix_min: null              # trade only if India VIX at entry >= vix_min (null = no limit)
   vix_max: null              # ... and <= vix_max
+  # VIX regimes (optional): first match sets that day's stop_loss_pct; no match -> no trade.
+  # vix_regimes:
+  #   - {vix_below: 11, stop_loss_pct: 40}
+  #   - {vix_above: 14, stop_loss_pct: 30}
+  vix_regimes: []
   schedule:
     NIFTY:
       days: [MON, TUE, FRI]  # Tue is NIFTY expiry -> skipped by skip_expiry_day
