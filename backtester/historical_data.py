@@ -75,7 +75,7 @@ class HistoricalMarketData(MarketData):
             self._chains[key] = [
                 Instrument(
                     symbol=r.trading_symbol, exchange=u.option_exchange, underlying=underlying,
-                    lot_size=int(r.lot_size), expiry=expiry, strike=float(r.strike_price),
+                    lot_size=u.lot_size(expiry), expiry=expiry, strike=float(r.strike_price),
                     option_type=OptionType(r.option_type),
                 )
                 for r in df.itertuples()

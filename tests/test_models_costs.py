@@ -53,3 +53,13 @@ def test_costs_sell_has_stt_buy_has_stamp():
 def test_cost_model_from_config():
     c = CostModel.from_dict({"brokerage_per_order": 10, "exchange_txn": {"BFO": 0.0005}})
     assert c.brokerage_per_order == 10 and c.txn_rate(Exchange.BFO) == 0.0005
+
+
+def test_lot_sizes_by_expiry():
+    from datetime import date
+    from data.underlyings import get_underlying
+    nifty, sensex = get_underlying("NIFTY"), get_underlying("SENSEX")
+    assert nifty.lot_size(date(2025, 12, 23)) == 75
+    assert nifty.lot_size(date(2026, 1, 6)) == 65
+    assert sensex.lot_size(date(2025, 9, 4)) == 20
+    assert sensex.lot_size(date(2027, 1, 28)) == 25

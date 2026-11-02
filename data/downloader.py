@@ -124,7 +124,9 @@ def main() -> None:
 
     if args.cmd == "check":
         profile = client.profile() or {}
-        print("Token OK. Logged in as:", profile.get("name") or profile.get("user_name") or "<unknown>")
+        name = " ".join(filter(None, [profile.get("first_name"), profile.get("last_name")]))
+        print("Token OK. Logged in as:", name or "<unknown>")
+        print("F&O enabled: NSE", profile.get("is_nse_fno_onboarded"), "| BSE", profile.get("is_bse_fno_onboarded"))
     elif args.cmd == "index":
         download_index(client, store, args.underlying, args.start, args.end, args.interval)
     else:
