@@ -37,10 +37,11 @@ def run_backtest(strategy_name: str, start: date, end: date, store: DataStore | 
         start = data_start
 
     data = HistoricalMarketData(store or DataStore(), interval)
+    excluded = set(config.get("exclude_dates") or [])
     stamps = set()
     for u in underlyings:
         stamps.update(data.index_frame(u).loc[str(start):str(end)].index)
-    timeline = [ts.to_pydatetime() for ts in sorted(stamps)]
+    timeline = [ts.to_pydatetime() for ts in sorted(stamps) if ts.date() not in excluded]
 
     broker = SimBroker(
         quote=lambda inst: data.bar_at(inst, data.now()),
