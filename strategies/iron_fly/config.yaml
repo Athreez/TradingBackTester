@@ -15,7 +15,8 @@ params:
   entry_time: "09:22"
   exit_time: "14:45"
   entry_window_minutes: 5    # skip the day if no candle within 5 min of entry_time (special sessions)
-  stop_loss_pct: 50          # per short leg: exit when premium rises 50% above sell price
+  stop_loss_pct: 50          # per short leg: SL when premium rises 50% above sell price
+  on_stop_loss: exit_all     # exit_all: any SL closes every leg for the day | exit_side: only that side + its hedge
   schedule:
     NIFTY:
       days: [MON, TUE, WED, THU, FRI]

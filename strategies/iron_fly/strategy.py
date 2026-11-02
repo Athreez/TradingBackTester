@@ -1,8 +1,9 @@
 """Intraday iron fly on the nearest weekly expiry.
 
 At entry_time: buy hedges at ATM +/- hedge_distance, sell ATM CE + PE.
-Each short leg gets a stop-loss at entry * (1 + stop_loss_pct/100); when it
-fires, that side's hedge is sold too. Everything left is squared off at exit_time.
+Each short leg gets a stop-loss at entry * (1 + stop_loss_pct/100). When one
+fires: `exit_all` (default) squares off every remaining leg and stops for the
+day; `exit_side` only sells that side's hedge. Anything left is squared off at exit_time.
 Which underlying trades depends on the weekday (see config.yaml `schedule`).
 """
 from __future__ import annotations
@@ -18,13 +19,16 @@ log = logging.getLogger(__name__)
 WEEKDAYS = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4}
 
 
-class TripleIronFly(Strategy):
+class IronFly(Strategy):
     def __init__(self, params):
         super().__init__(params)
         self.entry_time = time.fromisoformat(params["entry_time"])
         self.exit_time = time.fromisoformat(params["exit_time"])
         self.entry_window = timedelta(minutes=int(params.get("entry_window_minutes", 5)))
         self.sl_pct = float(params["stop_loss_pct"]) / 100
+        self.on_stop_loss = params.get("on_stop_loss", "exit_all")
+        if self.on_stop_loss not in ("exit_all", "exit_side"):
+            raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
         self.by_weekday: dict[int, tuple[str, dict]] = {}
         for underlying, cfg in params["schedule"].items():
             for day in cfg["days"]:
@@ -64,8 +68,13 @@ class TripleIronFly(Strategy):
         if kind == "short":
             trigger = round(fill.price * (1 + self.sl_pct), 2)
             ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}")
-        elif kind == "sl":
-            ctx.sell(self.hedges[OptionType(side)], self.lots, tag=f"hedge-exit:{side}")
+        elif kind == "sl" and self.state == "OPEN":  # a 2nd SL in the same bar is already handled
+            if self.on_stop_loss == "exit_all":
+                ctx.cancel_all()
+                ctx.square_off_all(tag="sl-exit")
+                self.state = "DONE"
+            else:
+                ctx.sell(self.hedges[OptionType(side)], self.lots, tag=f"hedge-exit:{side}")
 
     # ---- helpers --------------------------------------------------------
 

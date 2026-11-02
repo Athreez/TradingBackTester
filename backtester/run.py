@@ -2,8 +2,8 @@
 
 Usage:
   python -m backtester.run --list
-  python -m backtester.run --strategy triple_iron_fly --from 2025-09-01 --to 2026-10-30
-  python -m backtester.run --strategy triple_iron_fly --from 2025-09-01 --to 2026-10-30 \
+  python -m backtester.run --strategy iron_fly --from 2025-09-01 --to 2026-10-30
+  python -m backtester.run --strategy iron_fly --from 2025-09-01 --to 2026-10-30 \
       --set schedule.NIFTY.lots=5 --set schedule.SENSEX.lots=5 --label 5lots
 """
 from __future__ import annotations

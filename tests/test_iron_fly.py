@@ -53,8 +53,9 @@ def store(tmp_path):
     return s
 
 
-def test_iron_fly_day(store):
-    result = run_backtest("triple_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store)
+def test_exit_side_on_stop_loss(store):
+    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={"on_stop_loss": "exit_side"})
     fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
     at = lambda hm: datetime.fromisoformat(f"{DAY} {hm}")
 
@@ -75,3 +76,18 @@ def test_iron_fly_day(store):
     assert len(result.fills) == 8
     assert result.broker.positions() == {}
     assert ("sl:PE", "NIFTY25SEP0924000PE") not in fills
+
+
+def test_exit_all_on_stop_loss(store):
+    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={"on_stop_loss": "exit_all"})
+    fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
+    at = lambda hm: datetime.fromisoformat(f"{DAY} {hm}")
+
+    assert fills[("sl:CE", "NIFTY25SEP0924000CE")].ts == at("10:30")
+    # Every remaining leg closes on the next bar; nothing waits for 14:45.
+    for sym in ("NIFTY25SEP0924000PE", "NIFTY25SEP0924400CE", "NIFTY25SEP0923600PE"):
+        assert fills[("sl-exit", sym)].ts == at("10:31")
+    assert not any(tag in ("exit-time", "sl:PE") for tag, _ in fills)
+    assert len(result.fills) == 8
+    assert result.broker.positions() == {} and result.broker.open_orders() == []
