@@ -6,12 +6,12 @@ import pytest
 from backtester.run import run_backtest
 from data.store import DataStore
 
-DAY = "2025-01-06"  # Monday -> NIFTY
-EXPIRY = date(2025, 1, 9)
+DAY = "2025-09-08"  # Monday -> NIFTY
+EXPIRY = date(2025, 9, 9)
 SYMS = {
-    ("CE", 24000): "NIFTY25JAN0924000CE", ("PE", 24000): "NIFTY25JAN0924000PE",
-    ("CE", 24400): "NIFTY25JAN0924400CE", ("PE", 23600): "NIFTY25JAN0923600PE",
-    ("CE", 24100): "NIFTY25JAN0924100CE",  # extra strike, never traded
+    ("CE", 24000): "NIFTY25SEP0924000CE", ("PE", 24000): "NIFTY25SEP0924000PE",
+    ("CE", 24400): "NIFTY25SEP0924400CE", ("PE", 23600): "NIFTY25SEP0923600PE",
+    ("CE", 24100): "NIFTY25SEP0924100CE",  # extra strike, never traded
 }
 
 
@@ -54,24 +54,24 @@ def store(tmp_path):
 
 
 def test_iron_fly_day(store):
-    result = run_backtest("triple_iron_fly", date(2025, 1, 6), date(2025, 1, 6), store=store)
+    result = run_backtest("triple_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store)
     fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
     at = lambda hm: datetime.fromisoformat(f"{DAY} {hm}")
 
     # Entry at 09:22, hedges +/-400 around ATM 24000 (spot 24010).
-    for tag, sym in [("hedge:CE", "NIFTY25JAN0924400CE"), ("hedge:PE", "NIFTY25JAN0923600PE"),
-                     ("short:CE", "NIFTY25JAN0924000CE"), ("short:PE", "NIFTY25JAN0924000PE")]:
+    for tag, sym in [("hedge:CE", "NIFTY25SEP0924400CE"), ("hedge:PE", "NIFTY25SEP0923600PE"),
+                     ("short:CE", "NIFTY25SEP0924000CE"), ("short:PE", "NIFTY25SEP0924000PE")]:
         assert fills[(tag, sym)].ts == at("09:22")
 
-    short_ce = fills[("short:CE", "NIFTY25JAN0924000CE")].price  # 100 less slippage
-    sl = fills[("sl:CE", "NIFTY25JAN0924000CE")]
+    short_ce = fills[("short:CE", "NIFTY25SEP0924000CE")].price  # 100 less slippage
+    sl = fills[("sl:CE", "NIFTY25SEP0924000CE")]
     assert sl.ts == at("10:30")
     assert sl.price == pytest.approx(round(short_ce * 1.5, 2) * 1.0005)  # SL-M at trigger + slippage
 
     # CE hedge sold on the next bar; PE side runs to 14:45.
-    assert fills[("hedge-exit:CE", "NIFTY25JAN0924400CE")].ts == at("10:31")
-    assert fills[("exit-time", "NIFTY25JAN0924000PE")].ts == at("14:45")
-    assert fills[("exit-time", "NIFTY25JAN0923600PE")].ts == at("14:45")
+    assert fills[("hedge-exit:CE", "NIFTY25SEP0924400CE")].ts == at("10:31")
+    assert fills[("exit-time", "NIFTY25SEP0924000PE")].ts == at("14:45")
+    assert fills[("exit-time", "NIFTY25SEP0923600PE")].ts == at("14:45")
     assert len(result.fills) == 8
     assert result.broker.positions() == {}
-    assert ("sl:PE", "NIFTY25JAN0924000PE") not in fills
+    assert ("sl:PE", "NIFTY25SEP0924000PE") not in fills

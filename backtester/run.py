@@ -26,6 +26,10 @@ def run_backtest(strategy_name: str, start: date, end: date, store: DataStore | 
     interval = config.get("interval", "1minute")
     underlyings = config["underlyings"]
     capital = capital or float(config.get("capital", 500_000))
+    data_start = config.get("data_start")
+    if data_start and start < data_start:
+        print(f"Note: {strategy_name} only uses data from {data_start}; ignoring {start} -> {data_start}")
+        start = data_start
 
     data = HistoricalMarketData(store or DataStore(), interval)
     stamps = set()

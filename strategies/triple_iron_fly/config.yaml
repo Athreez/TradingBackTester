@@ -1,5 +1,6 @@
 underlyings: [NIFTY, SENSEX]
 interval: 1minute      # candle interval the strategy runs on
+data_start: 2025-09-01 # NIFTY expiry -> Tue, SENSEX -> Thu from here; earlier data isn't comparable
 capital: 500000
 
 # Overrides for core/costs.py CostModel. Defaults = Zerodha F&O options charges.
