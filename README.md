@@ -54,4 +54,4 @@ intrinsic value against the index close.
 - Credentials live only in `.env` files, which are git-ignored (`.env.example` files hold placeholders).
 - The pre-commit hook (`scripts/check_secrets.py`) blocks staged `.env`/key files and token-like values.
 - Wrap secrets with `core.config.secret()`; the value is masked in logs and reprs.
-- INDmoney tokens expire every 24h; order placement additionally needs a whitelisted static IP.
+- INDmoney tokens expire at 7 AM every morning; order placement additionally needs a whitelisted static IP.

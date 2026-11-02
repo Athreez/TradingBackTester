@@ -1,7 +1,7 @@
 """Thin wrapper over the INDstocks (INDmoney) REST API -- market data only.
 
 Docs: https://api-docs.indstocks.com
-Auth: raw access token in the `Authorization` header (valid 24h).
+Auth: raw access token in the `Authorization` header (valid until 7 AM next morning).
 Rate limit for data APIs: 5 req/s, 100k/day -> we stay under with a client-side limiter.
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ class IndMoneyClient:
                 time.sleep(delay)
                 continue
             if resp.status_code == 401:
-                raise IndMoneyError("Unauthorized: INDMONEY_ACCESS_TOKEN is missing/expired (tokens last 24h).")
+                raise IndMoneyError("Unauthorized: INDMONEY_ACCESS_TOKEN is missing/expired (tokens expire at 7 AM daily; generate a new one).")
             if not resp.ok:
                 raise IndMoneyError(f"GET {path} failed: HTTP {resp.status_code}: {resp.text[:500]}")
             return resp
