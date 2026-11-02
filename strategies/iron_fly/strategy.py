@@ -26,6 +26,7 @@ class IronFly(Strategy):
         self.exit_time = time.fromisoformat(params["exit_time"])
         self.entry_window = timedelta(minutes=int(params.get("entry_window_minutes", 5)))
         self.sl_pct = float(params["stop_loss_pct"]) / 100
+        self.skip_expiry_day = bool(params.get("skip_expiry_day", False))
         self.on_stop_loss = params.get("on_stop_loss", "exit_all")
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
@@ -88,6 +89,9 @@ class IronFly(Strategy):
             log.warning("%s %s: no spot/expiry data, skipping day", self._day, underlying)
             return
         expiry = expiries[0]
+        if self.skip_expiry_day and expiry == self._day:
+            log.info("%s %s: expiry day, no trade", self._day, underlying)
+            return
         chain = ctx.data.option_chain(underlying, expiry)
         if not chain:
             log.warning("%s %s: empty option chain for %s, skipping day", self._day, underlying, expiry)

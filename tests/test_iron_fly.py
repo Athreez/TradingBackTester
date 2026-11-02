@@ -91,3 +91,12 @@ def test_exit_all_on_stop_loss(store):
     assert not any(tag in ("exit-time", "sl:PE") for tag, _ in fills)
     assert len(result.fills) == 8
     assert result.broker.positions() == {} and result.broker.open_orders() == []
+
+
+@pytest.mark.parametrize("skip, expected_fills", [(True, 0), (False, 8)])
+def test_skip_expiry_day(store, skip, expected_fills):
+    # Make the trading day itself the nearest expiry.
+    store.save_contracts("NIFTY", date(2025, 9, 8), store.load_contracts("NIFTY", EXPIRY))
+    result = run_backtest("iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={"skip_expiry_day": skip, "on_stop_loss": "exit_side"})
+    assert len(result.fills) == expected_fills

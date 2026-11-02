@@ -16,14 +16,14 @@ params:
   exit_time: "14:45"
   entry_window_minutes: 5    # skip the day if no candle within 5 min of entry_time (special sessions)
   stop_loss_pct: 50          # per short leg: SL when premium rises 50% above sell price
-  on_stop_loss: exit_all     # exit_all: any SL closes every leg for the day | exit_side: only that side + its hedge
+  on_stop_loss: exit_side    # exit_side: only that side + its hedge exit | exit_all: any SL closes every leg
+  skip_expiry_day: true      # no trade on the underlying's own expiry day
   schedule:
     NIFTY:
-      days: [MON, TUE, WED, THU, FRI]
+      days: [MON, TUE, FRI]  # Tue is NIFTY expiry -> skipped by skip_expiry_day
       hedge_distance: 400    # buy ATM+400 CE and ATM-400 PE
       lots: 1
-    # SENSEX dropped: lost money even before charges in the Sep-2025..Oct-2026 backtest.
-    # SENSEX:
-    #   days: [WED, THU]
-    #   hedge_distance: 1000
-    #   lots: 1
+    SENSEX:
+      days: [WED, THU]       # Thu is SENSEX expiry -> skipped by skip_expiry_day
+      hedge_distance: 1000
+      lots: 1
