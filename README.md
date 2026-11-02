@@ -45,6 +45,7 @@ pytest
 
 ```sh
 copy paper_trader\.env.example paper_trader\.env   # STRATEGY=vix_iron_fly, CAPITAL=500000
+start_paper_trading.bat                # double-click: bot + dashboard in two windows
 python -m paper_trader.runner          # runs every trading day until Ctrl+C
 python -m paper_trader.runner --once   # just today's session
 ```
