@@ -1,6 +1,7 @@
 """Discover and load strategies from strategies/<name>/."""
 from __future__ import annotations
 
+import copy
 import importlib
 import inspect
 from typing import Any
@@ -38,5 +39,17 @@ def load_strategy(name: str, overrides: dict[str, Any] | None = None) -> tuple[S
     if len(classes) != 1:
         raise ValueError(f"strategies/{name}/strategy.py must define exactly one Strategy subclass")
     config = load_config(name)
-    params = {**config.get("params", {}), **(overrides or {})}
+    params = copy.deepcopy(config.get("params", {}))
+    for key, value in (overrides or {}).items():
+        _set_dotted(params, key, value)
     return classes[0](params), config
+
+
+def _set_dotted(d: dict, dotted: str, value: Any) -> None:
+    """_set_dotted(p, "schedule.NIFTY.lots", 5) -> p["schedule"]["NIFTY"]["lots"] = 5"""
+    *parents, leaf = dotted.split(".")
+    for part in parents:
+        if not isinstance(d.get(part), dict):
+            raise KeyError(f"param '{dotted}': '{part}' is not a section in config.yaml params")
+        d = d[part]
+    d[leaf] = value
