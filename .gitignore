@@ -47,3 +47,4 @@ live_trader/state/
 
 # ---- Simulated paper runs (python -m paper_trader.simulate) ----
 paper_trader/sim/
+paper_trader/backup/

@@ -218,6 +218,11 @@ def dashboard() -> None:
     if snap is None:
         st.info("No data yet. The dashboard fills in once the bot has started.")
         return
+    marker = STATE_DIR / "simulated_history.json"
+    if not SIMULATION and marker.exists():
+        sim = json.loads(marker.read_text())
+        st.info(f"Sessions {sim['from']} to {sim['to']} were simulated (replayed minute by minute through the "
+                f"bot's engine on recorded candles). Everything after {sim['to']} is live paper trading.", icon="🧪")
 
     # -- account -----------------------------------------------------------
     today = datetime.fromisoformat(snap["day"]).date() if snap.get("day") else now.date()  # bot's session day

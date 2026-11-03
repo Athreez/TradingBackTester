@@ -136,14 +136,7 @@ class PaperBot:
                  self.broker.cash, len(self.broker.positions()), self.last_bar)
 
     def _save(self) -> None:
-        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        broker_state = {k: v for k, v in self.broker.__dict__.items() if k != "_quote"}
-        tmp = STATE_PATH.with_suffix(".tmp")
-        tmp.write_bytes(pickle.dumps({
-            "strategy_name": self.strategy_name, "broker": broker_state, "strategy": self.strategy,
-            "last_bar": self.last_bar, "day": self.day, "day_closed": self.day_closed,
-        }))
-        tmp.replace(STATE_PATH)
+        save_state(STATE_PATH, self.strategy_name, self.broker, self.strategy, self.last_bar, self.day, self.day_closed)
 
     # ---- day lifecycle --------------------------------------------------
 
@@ -242,6 +235,18 @@ class PaperBot:
 
 
 # ---- shared with paper_trader/simulate.py (same journals and snapshot) ----
+
+def save_state(path: Path, strategy_name: str, broker: SimBroker, strategy, last_bar: datetime | None,
+               day: date | None, day_closed: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    broker_state = {k: v for k, v in broker.__dict__.items() if k != "_quote"}
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(pickle.dumps({
+        "strategy_name": strategy_name, "broker": broker_state, "strategy": strategy,
+        "last_bar": last_bar, "day": day, "day_closed": day_closed,
+    }))
+    tmp.replace(path)
+
 
 def log_fills(fills, log_dir: Path) -> None:
     for f in fills:
