@@ -140,6 +140,14 @@ class LiveFeed:
             log.info("%s: loaded %d contracts for expiries %s", name,
                      int((rows["expiry"].isin(expiries)).sum()), [str(e) for e in expiries])
 
+        # Recent sessions' index candles: the reference level the options-implied spot starts from if the
+        # index feed has a gap today (INDmoney had no NIFTY 50 candles on 2026-11-03). Never replayed as bars.
+        session_open = datetime.combine(today, SESSION_OPEN)
+        try:
+            self.poll([], session_open - timedelta(days=6), session_open)
+        except Exception as e:
+            log.warning("could not load previous sessions' index candles: %s", e)
+
     def poll(self, symbols: list[str], start: datetime, end: datetime) -> None:
         """Fetch candles in [start, end) for all indices plus the given option symbols."""
         codes = [c for c, (_, sym) in self._code_to_key.items() if sym in self.indices]
@@ -150,10 +158,11 @@ class LiveFeed:
             self.store.save_candles(self.interval, exchange, symbol, df)
 
     def index_bars(self, after: datetime | None, upto: datetime) -> list[datetime]:
-        """Completed index bar timestamps in (after, upto], across all underlyings."""
+        """Today's completed index bar timestamps in (after, upto], across all underlyings."""
         out = set()
         for name in self.underlyings:
             idx = self.store.load_candles(self.interval, *index_spec_key(name)).index
+            idx = idx[idx.date == self._day] if self._day else idx
             sel = idx[(idx <= upto) & ((idx > after) if after else True)]
             out.update(sel)
         return [t.to_pydatetime() for t in sorted(out)]

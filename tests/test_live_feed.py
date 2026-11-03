@@ -60,7 +60,7 @@ def test_option_candles_are_fetched_once_on_first_access(tmp_path):
     _, store, client = make_feed(tmp_path)
     assert len(store.load_candles("1minute", "NFO", "NIFTY26NOV0323600PE")) == 1
     store.load_candles("1minute", "NFO", "NIFTY26NOV0323600PE")
-    assert client.requested == [["NFO_54065"]]
+    assert client.requested[-1] == ["NFO_54065"] and client.requested.count(["NFO_54065"]) == 1
 
 
 def test_missing_index_codes_are_resolved_and_cached(tmp_path):
@@ -68,3 +68,14 @@ def test_missing_index_codes_are_resolved_and_cached(tmp_path):
     assert store.get_index_code("NIFTY") == "NSE_40000001"
     assert store.get_index_code("INDIAVIX") == "NSE_40000107"
     assert feed._code_to_key["NSE_40000001"] == ("NSE", "NIFTY")
+
+
+def test_previous_sessions_are_loaded_but_never_replayed_as_bars(tmp_path):
+    feed, store, client = make_feed(tmp_path)
+    assert any("NSE_40000001" in r for r in client.requested)  # index history fetched at startup
+    idx = pd.DatetimeIndex([pd.Timestamp("2026-11-02 15:29"), pd.Timestamp("2026-11-03 09:15"),
+                            pd.Timestamp("2026-11-03 09:16")], name="ts")
+    store.save_candles("1minute", "NSE", "NIFTY", pd.DataFrame(
+        {"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 0.0}, index=idx))
+    bars = feed.index_bars(None, pd.Timestamp("2026-11-03 09:30").to_pydatetime())
+    assert [b.strftime("%m-%d %H:%M") for b in bars] == ["11-03 09:15", "11-03 09:16"]
