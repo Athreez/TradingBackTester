@@ -20,7 +20,7 @@ HERE = Path(os.environ.get("PAPER_TRADER_DIR", Path(__file__).parent))  # overri
 LOG_DIR = HERE / "logs"
 STATE_DIR = HERE / "state"
 IST = timezone(timedelta(hours=5, minutes=30))
-REFRESH = "5s"
+WATCH_EVERY = "1s"  # how often the status row ticks and checks for new bot data
 
 # Validated (dataviz validate_palette.js): profit/loss poles + single-series line, light and dark.
 PALETTE = {
@@ -92,6 +92,15 @@ def read_snapshot() -> dict | None:
         return None
 
 
+def data_signature() -> tuple:
+    """Changes only when the bot writes new data, not on its every-poll heartbeat (updated_at)."""
+    snap = read_snapshot()
+    if snap:
+        snap.pop("updated_at", None)
+    files = [LOG_DIR / n for n in ("fills.csv", "daily.csv", "equity.csv")] + sorted(LOG_DIR.glob("paper_*.log"))[-1:]
+    return json.dumps(snap, sort_keys=True), tuple((p.name, p.stat().st_mtime_ns) for p in files if p.exists())
+
+
 def theme() -> dict:
     try:
         mode = "dark" if st.context.theme.type == "dark" else "light"
@@ -142,18 +151,17 @@ def pnl_bars(df: pd.DataFrame, c: dict) -> alt.Chart:
 st.set_page_config(page_title="Paper Trading Bot", page_icon="📈", layout="wide")
 
 
-@st.fragment(run_every=REFRESH)
-def dashboard() -> None:
-    snap = read_snapshot()
-    fills = read_csv("fills.csv")
-    daily = read_csv("daily.csv", dates=("date",))
-    equity = read_csv("equity.csv")
-    c = theme()
-    now = ist_now()
+@st.fragment(run_every=WATCH_EVERY)
+def live_status() -> None:
+    """Ticks every second; reruns the whole page only when the bot's data has changed (like a React re-render)."""
+    sig = data_signature()
+    if st.session_state.setdefault("data_sig", sig) != sig:
+        st.session_state.data_sig = sig
+        st.rerun()
 
-    title = f"Paper trading · {snap['strategy']}" if snap else "Paper trading"
-    st.title(title)
-    st.caption(f"Refreshes every {REFRESH} · {now:%a %d %b %Y, %H:%M:%S} IST")
+    snap = read_snapshot()
+    now = ist_now()
+    st.caption(f"Live · redraws when the bot writes new data · {now:%a %d %b %Y, %H:%M:%S} IST")
 
     # -- bot health --------------------------------------------------------
     running = bot_running()
@@ -171,6 +179,18 @@ def dashboard() -> None:
         st.warning("The bot is not running. Start it with `python -m paper_trader.runner`.", icon="⚠️")
     elif age is not None and age > 60 and snap and snap["phase"] == "trading session":
         st.warning(f"No update for {age:.0f}s during the session. Check the log below.", icon="⚠️")
+
+
+def dashboard() -> None:
+    snap = read_snapshot()
+    fills = read_csv("fills.csv")
+    daily = read_csv("daily.csv", dates=("date",))
+    equity = read_csv("equity.csv")
+    c = theme()
+    now = ist_now()
+
+    st.title(f"Paper trading · {snap['strategy']}" if snap else "Paper trading")
+    live_status()
 
     if snap is None:
         st.info("No data yet. The dashboard fills in once the bot has started.")
