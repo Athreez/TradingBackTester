@@ -223,93 +223,117 @@ class PaperBot:
             self._write_snapshot(data, "trading session")
             _pause(POLL_SECONDS)
 
-        # End of day: settle anything expiring today, then report.
-        if self.last_bar and self.last_bar.date() == today:
-            data.set_time(self.last_bar)
-            for fill in settle_expiring(self.broker, data, self.last_bar):
-                self.strategy.on_fill(ctx, fill)
-            self._log_new_fills()
-        if self.broker.positions():
-            log.warning("Positions still open after close: %s",
-                        {i.symbol: p.quantity for i, p in self.broker.positions().items()})
-        day_fills = [f for f in self.broker.fills() if f.ts.date() == today]
-        gross = sum((f.quantity * f.price) * (1 if f.side is Side.SELL else -1) for f in day_fills)
-        charges = sum(f.charges for f in day_fills)
-        row = {"date": today, "fills": len(day_fills), "gross": round(gross, 2), "charges": round(charges, 2),
-               "net": round(gross - charges, 2), "equity": round(self.broker.equity(data.ltp), 2)}
-        _append_csv(LOG_DIR / "daily.csv", row)
-        log.info("=== %s closed: %s", today, row)
+        close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, LOG_DIR)
+        self._log_new_fills()
         self.day_closed = True
         self._save()
         self._write_snapshot(data, "session closed")
 
     def _write_snapshot(self, data: HistoricalMarketData | None, phase: str) -> None:
-        """Small JSON for the dashboard: positions with last prices, pending stops, day status."""
-        from data.indmoney_auth import CACHE_PATH, _read_cache
-
-        def ltp(inst):
-            if data is None or data._now is None:
-                return None
-            return data.ltp(inst)
-
-        positions = []
-        for inst, pos in self.broker.positions().items():
-            last = ltp(inst)
-            positions.append({"symbol": inst.symbol, "qty": pos.quantity, "avg_price": round(pos.avg_price, 2),
-                              "ltp": last, "unrealized": round(pos.unrealized_pnl(last), 2) if last else None})
-        orders = [{"symbol": o.instrument.symbol, "side": o.side.value, "type": o.order_type.value,
-                   "qty": o.quantity, "trigger": o.trigger_price, "limit": o.limit_price, "tag": o.tag}
-                  for o in self.broker.open_orders()]
-        st = self.strategy
-        today = getattr(st, "today", None)
-        token = _read_cache(CACHE_PATH)
-        snap = {
-            "updated_at": ist_now().isoformat(timespec="seconds"),
-            "phase": phase,
-            "strategy": self.strategy_name,
-            "day": str(self.day) if self.day else None,
-            "last_bar": self.last_bar.isoformat() if self.last_bar else None,
-            "underlying": today[0] if today else None,
-            "spot": (data.spot(today[0]) if data is not None and data._now is not None and today else None),
-            "vix_at_entry": getattr(st, "day_vix", None),
-            "day_sl_pct": getattr(st, "day_sl_pct", None),
-            "state": getattr(st, "state", None),
-            "note": getattr(st, "note", None),
-            "cash": round(self.broker.cash, 2),
-            "equity": round(self.broker.equity(ltp if data is not None else (lambda i: None)), 2),
-            "initial_capital": self.broker.initial_capital,
-            "positions": positions,
-            "open_orders": orders,
-            "token_valid_until": token[1].isoformat(timespec="minutes") if token else None,
-        }
-        SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = SNAPSHOT_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(snap, indent=2, default=str))
-        for _ in range(10):
-            try:
-                tmp.replace(SNAPSHOT_PATH)
-                return
-            except PermissionError:  # Windows: a dashboard has live.json open for a moment
-                _time.sleep(0.05)
-        log.warning("could not update %s (file in use); the next poll writes it again", SNAPSHOT_PATH.name)
+        write_snapshot(SNAPSHOT_PATH, phase=phase, strategy_name=self.strategy_name, broker=self.broker,
+                       strategy=self.strategy, data=data, day=self.day, last_bar=self.last_bar)
 
     def _log_new_fills(self) -> None:
-        for f in self.broker.fills()[self._fills_logged:]:
-            log.info("FILL %s %s %d @ %.2f (charges %.2f) [%s]", f.side.value, f.instrument.symbol,
-                     f.quantity, f.price, f.charges, f.tag)
-            _append_csv(LOG_DIR / "fills.csv", {
-                "ts": f.ts, "symbol": f.instrument.symbol, "side": f.side.value, "qty": f.quantity,
-                "price": round(f.price, 2), "charges": round(f.charges, 2), "tag": f.tag})
+        log_fills(self.broker.fills()[self._fills_logged:], LOG_DIR)
         self._fills_logged = len(self.broker.fills())
 
     def _setup_logfile(self, today: date) -> None:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        root = logging.getLogger()
-        for h in [h for h in root.handlers if isinstance(h, logging.FileHandler)]:
-            root.removeHandler(h)
-        fh = logging.FileHandler(LOG_DIR / f"paper_{today:%Y%m%d}.log", encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-        root.addHandler(fh)
+        setup_day_logfile(LOG_DIR, today)
+
+
+# ---- shared with paper_trader/simulate.py (same journals and snapshot) ----
+
+def log_fills(fills, log_dir: Path) -> None:
+    for f in fills:
+        log.info("FILL %s %s %d @ %.2f (charges %.2f) [%s]", f.side.value, f.instrument.symbol,
+                 f.quantity, f.price, f.charges, f.tag)
+        _append_csv(log_dir / "fills.csv", {
+            "ts": f.ts, "symbol": f.instrument.symbol, "side": f.side.value, "qty": f.quantity,
+            "price": round(f.price, 2), "charges": round(f.charges, 2), "tag": f.tag})
+
+
+def setup_day_logfile(log_dir: Path, day: date, fmt: logging.Formatter | None = None) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    for h in [h for h in root.handlers if isinstance(h, logging.FileHandler)]:
+        root.removeHandler(h)
+        h.close()
+    fh = logging.FileHandler(log_dir / f"paper_{day:%Y%m%d}.log", encoding="utf-8")
+    fh.setFormatter(fmt or logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(fh)
+
+
+def close_day(strategy, ctx: Context, broker: SimBroker, data: HistoricalMarketData, day: date,
+              last_bar: datetime | None, log_dir: Path) -> dict:
+    """Settle anything expiring today, append the day's row to daily.csv and return it."""
+    if last_bar and last_bar.date() == day:
+        data.set_time(last_bar)
+        for fill in settle_expiring(broker, data, last_bar):
+            strategy.on_fill(ctx, fill)
+    if broker.positions():
+        log.warning("Positions still open after close: %s",
+                    {i.symbol: p.quantity for i, p in broker.positions().items()})
+    day_fills = [f for f in broker.fills() if f.ts.date() == day]
+    gross = sum((f.quantity * f.price) * (1 if f.side is Side.SELL else -1) for f in day_fills)
+    charges = sum(f.charges for f in day_fills)
+    row = {"date": day, "fills": len(day_fills), "gross": round(gross, 2), "charges": round(charges, 2),
+           "net": round(gross - charges, 2), "equity": round(broker.equity(data.ltp), 2)}
+    _append_csv(log_dir / "daily.csv", row)
+    log.info("=== %s closed: %s", day, row)
+    return row
+
+
+def write_snapshot(path: Path, *, phase: str, strategy_name: str, broker: SimBroker, strategy,
+                   data: HistoricalMarketData | None, day: date | None, last_bar: datetime | None,
+                   extra: dict | None = None) -> None:
+    """Small JSON for the dashboard: positions with last prices, pending stops, day status."""
+    from data.indmoney_auth import CACHE_PATH, _read_cache
+
+    def ltp(inst):
+        if data is None or data._now is None:
+            return None
+        return data.ltp(inst)
+
+    positions = []
+    for inst, pos in broker.positions().items():
+        last = ltp(inst)
+        positions.append({"symbol": inst.symbol, "qty": pos.quantity, "avg_price": round(pos.avg_price, 2),
+                          "ltp": last, "unrealized": round(pos.unrealized_pnl(last), 2) if last else None})
+    orders = [{"symbol": o.instrument.symbol, "side": o.side.value, "type": o.order_type.value,
+               "qty": o.quantity, "trigger": o.trigger_price, "limit": o.limit_price, "tag": o.tag}
+              for o in broker.open_orders()]
+    today = getattr(strategy, "today", None)
+    token = _read_cache(CACHE_PATH)
+    snap = {
+        "updated_at": ist_now().isoformat(timespec="seconds"),
+        "phase": phase,
+        "strategy": strategy_name,
+        "day": str(day) if day else None,
+        "last_bar": last_bar.isoformat() if last_bar else None,
+        "underlying": today[0] if today else None,
+        "spot": (data.spot(today[0]) if data is not None and data._now is not None and today else None),
+        "vix_at_entry": getattr(strategy, "day_vix", None),
+        "day_sl_pct": getattr(strategy, "day_sl_pct", None),
+        "state": getattr(strategy, "state", None),
+        "note": getattr(strategy, "note", None),
+        "cash": round(broker.cash, 2),
+        "equity": round(broker.equity(ltp if data is not None else (lambda i: None)), 2),
+        "initial_capital": broker.initial_capital,
+        "positions": positions,
+        "open_orders": orders,
+        "token_valid_until": token[1].isoformat(timespec="minutes") if token else None,
+        **(extra or {}),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(snap, indent=2, default=str))
+    for _ in range(10):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:  # Windows: a dashboard has live.json open for a moment
+            _time.sleep(0.05)
+    log.warning("could not update %s (file in use); the next poll writes it again", path.name)
 
 
 def main() -> None:

@@ -155,6 +155,17 @@ def pnl_bars(df: pd.DataFrame, c: dict) -> alt.Chart:
 
 st.set_page_config(page_title="Paper Trading Bot", page_icon="📈", layout="wide")
 
+# Live paper account, or a replay written by `python -m paper_trader.simulate` (paper_trader/sim/).
+SIM_DIR = HERE / "sim"
+SIMULATION = False
+if (SIM_DIR / "state" / "live.json").exists():
+    view = st.sidebar.radio("View", ["Live paper account", "Simulation"],
+                            help="Simulation = past sessions replayed through the bot's engine "
+                                 "(python -m paper_trader.simulate --from ... --to ...)")
+    SIMULATION = view == "Simulation"
+    if SIMULATION:
+        LOG_DIR, STATE_DIR = SIM_DIR / "logs", SIM_DIR / "state"
+
 
 @st.fragment(run_every=WATCH_EVERY)
 def live_status() -> None:
@@ -166,6 +177,11 @@ def live_status() -> None:
 
     snap = read_snapshot()
     now = ist_now()
+    if SIMULATION:
+        sim = (snap or {}).get("simulation", {})
+        st.info(f"Simulation: sessions {sim.get('from', '?')} to {sim.get('to', '?')} replayed minute by minute "
+                "through the paper bot's engine on downloaded candles. Not the live account.", icon="🧪")
+        return
     st.caption(f"Live · redraws when the bot writes new data · {now:%a %d %b %Y, %H:%M:%S} IST")
 
     # -- bot health --------------------------------------------------------
@@ -196,7 +212,7 @@ def dashboard() -> None:
     c = theme()
     now = ist_now()
 
-    st.title(f"Paper trading · {snap['strategy']}" if snap else "Paper trading")
+    st.title(f"{'Simulation' if SIMULATION else 'Paper trading'} · {snap['strategy']}" if snap else "Paper trading")
     live_status()
 
     if snap is None:

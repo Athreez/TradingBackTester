@@ -11,6 +11,9 @@ from data.store import DataStore
 from data.underlyings import get_underlying, index_spec
 
 
+INDEX_STALE_AFTER = timedelta(minutes=15)
+
+
 def _row_to_bar(ts, row) -> Bar:
     return Bar(ts.to_pydatetime(), row.open, row.high, row.low, row.close, row.volume)
 
@@ -57,9 +60,16 @@ class HistoricalMarketData(MarketData):
     # ---- MarketData -----------------------------------------------------
 
     def index_value(self, name: str) -> float | None:
+        """Latest close, or None if the index has no candle from today's session within INDEX_STALE_AFTER
+        (a data gap must not silently fall back to yesterday's price)."""
         df = self.index_frame(name)
         i = df.index.searchsorted(self.now(), side="right") - 1
-        return float(df["close"].iloc[i]) if i >= 0 else None
+        if i < 0:
+            return None
+        ts = df.index[i]
+        if ts.date() != self.now().date() or self.now() - ts > INDEX_STALE_AFTER:
+            return None
+        return float(df["close"].iloc[i])
 
     def spot(self, underlying: str) -> float | None:
         return self.index_value(underlying)

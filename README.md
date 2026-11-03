@@ -57,11 +57,31 @@ SL-M stops trigger on candle highs. Output goes to `paper_trader/logs/`
 every bar, so a restart resumes open positions and stop-losses instead of
 re-entering; only one bot can run at a time.
 
+### Simulating past sessions
+
+```sh
+python -m paper_trader.simulate --from 2026-10-01 --to 2026-11-03
+```
+
+Replays the downloaded candles minute by minute through the paper bot's engine
+and writes the same journals to `paper_trader/sim/` (the live account is never
+touched). Pick **Simulation** in the dashboard sidebar to view it.
+
+### Checking the data
+
+```sh
+python -m data.audit --from 2025-09-01 --to 2026-11-03
+```
+
+Index coverage per session, option naming vs strike/type/expiry, expiry-day
+consistency and put-call parity at entry. Run it after every download.
+
 ### Dashboard
 
 ```sh
 pip install -e ".[dashboard]"
-streamlit run paper_trader/dashboard.py     # or scriptsun_dashboard.cmd -> http://localhost:8501
+streamlit run paper_trader/dashboard.py     # or scripts
+un_dashboard.cmd -> http://localhost:8501
 ```
 
 Read-only view of the bot (never calls the broker API): bot health and token

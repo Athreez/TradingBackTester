@@ -44,3 +44,6 @@ paper_trader/logs/
 paper_trader/state/
 live_trader/logs/
 live_trader/state/
+
+# ---- Simulated paper runs (python -m paper_trader.simulate) ----
+paper_trader/sim/
