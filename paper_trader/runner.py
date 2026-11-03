@@ -170,7 +170,7 @@ class PaperBot:
 
         store = MemoryStore()
         feed = LiveFeed(self.client, store, self.underlyings, interval=self.interval)
-        while True:  # network may be down (e.g. switching Wi-Fi): keep retrying until it's back
+        while True:  # usually the network (e.g. switching Wi-Fi): keep retrying until it's back
             try:
                 feed.load_contracts(today)
                 break
@@ -179,7 +179,7 @@ class PaperBot:
                     log.error("Could not load contracts before the session closed: %s", e)
                     return
                 log.warning("loading contracts failed (%s); retrying in 30s", e)
-                self._write_snapshot(None, f"network problem, retrying: {e}")
+                self._write_snapshot(None, f"loading contracts failed, retrying: {e}")
                 _pause(30)
         data = HistoricalMarketData(store, self.interval)
         self.broker._quote = lambda inst: data.bar_at(inst, data.now())

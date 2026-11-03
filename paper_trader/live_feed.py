@@ -8,7 +8,8 @@ backtest (no look-ahead, fills on the next bar's open).
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Callable
 
 import pandas as pd
 
@@ -19,15 +20,28 @@ from data.underlyings import get_underlying, index_spec
 log = logging.getLogger(__name__)
 
 EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume"], index=pd.DatetimeIndex([], name="ts"))
+IST = timezone(timedelta(hours=5, minutes=30))
+SESSION_OPEN = time(9, 15)
+
+
+def option_symbol(underlying: str, expiry: date, strike: float, option_type: str) -> str:
+    """Unique per contract, in the format INDmoney uses for expired weeklies (NIFTY26NOV0323600PE).
+    The live master's TRADING_SYMBOL (NIFTY-Nov2026-23600-PE) is shared by every expiry in the month."""
+    return f"{underlying}{expiry:%y%b%d}".upper() + f"{strike:g}{option_type}"
 
 
 class MemoryStore(DataStore):
-    """In-memory DataStore for one trading day (index scrip codes still come from data/cache)."""
+    """In-memory DataStore for one trading day (index scrip codes still come from data/cache).
 
-    def __init__(self):
+    fetch_missing(exchange, symbol) is called the first time a series is asked for, so a strategy that
+    picks strikes mid-replay gets their candles from the session open (fills stay on the right bar)."""
+
+    def __init__(self, fetch_missing: Callable[[str, str], pd.DataFrame | None] | None = None):
         super().__init__()
         self._candles: dict[tuple[str, str], pd.DataFrame] = {}
         self._contracts: dict[tuple[str, date], pd.DataFrame] = {}
+        self.fetch_missing = fetch_missing
+        self._fetched: set[tuple[str, str]] = set()
 
     def save_candles(self, interval, exchange, symbol, df):
         if df.empty:
@@ -39,7 +53,13 @@ class MemoryStore(DataStore):
         self._candles[(exchange, symbol)] = df.sort_index()
 
     def load_candles(self, interval, exchange, symbol):
-        return self._candles.get((exchange, symbol), EMPTY)
+        key = (exchange, symbol)
+        if key not in self._candles and key not in self._fetched and self.fetch_missing:
+            df = self.fetch_missing(exchange, symbol)
+            if df is not None:  # None = fetch failed; try again on the next request
+                self._fetched.add(key)
+                self.save_candles(interval, exchange, symbol, df)
+        return self._candles.get(key, EMPTY)
 
     def has_candles(self, interval, exchange, symbol):
         return (exchange, symbol) in self._candles
@@ -64,16 +84,34 @@ class LiveFeed:
         self.indices = [*underlyings, *signal_indices]
         self._code_to_key: dict[str, tuple[str, str]] = {}  # scrip code -> (exchange, symbol)
         self._symbol_to_code: dict[str, str] = {}
+        self._day: date | None = None
+        store.fetch_missing = self._fetch_session
+
+    def _fetch_session(self, exchange: str, symbol: str) -> pd.DataFrame | None:
+        """Today's candles so far for one option (used by MemoryStore on first access)."""
+        code = self._symbol_to_code.get(symbol)
+        if code is None or self._day is None:
+            return EMPTY  # not an option we know (e.g. an index): nothing to fetch
+        start = datetime.combine(self._day, SESSION_OPEN)
+        end = datetime.now(IST).replace(tzinfo=None)
+        try:
+            return self.client.historical([code], self.interval, start, end).get(code, EMPTY)
+        except Exception as e:  # network hiccup: the next poll fetches it instead
+            log.warning("fetching %s failed: %s", symbol, e)
+            return None
 
     def load_contracts(self, today: date, expiries_per_underlying: int = 2) -> None:
         """Today's tradable option contracts (nearest expiries) from the live instrument master."""
+        self._day = today
         master = self.client.instruments("fno")
         master = master[master["OPTION_TYPE"].isin(["CE", "PE"])]
         for name in self.indices:
-            _, exchange = index_spec(name)
+            index_name, exchange = index_spec(name)
             code = self.store.get_index_code(name)
-            if code is None:
-                raise RuntimeError(f"No scrip code for {name}; run `python -m data.downloader index --underlying {name} ...` once")
+            if code is None:  # fresh install: look it up once and cache it, like the downloader does
+                code = self.client.index_scrip_code(index_name, exchange.value)
+                self.store.set_index_code(name, code)
+                log.info("Resolved %s index scrip code: %s", name, code)
             self._code_to_key[code] = (exchange.value, name)
 
         for name in self.underlyings:
@@ -87,13 +125,15 @@ class LiveFeed:
                 if lots != {u.lot_size(expiry)}:
                     log.warning("%s %s: live lot size %s != our table %s -- update data/underlyings.py",
                                 name, expiry, lots, u.lot_size(expiry))
+                strikes = chain["STRIKE_PRICE"].astype(float).values
+                symbols = [option_symbol(name, expiry, k, t) for k, t in zip(strikes, chain["OPTION_TYPE"])]
                 self.store.save_contracts(name, expiry, pd.DataFrame({
-                    "trading_symbol": chain["TRADING_SYMBOL"].values,
-                    "strike_price": chain["STRIKE_PRICE"].astype(float).values,
+                    "trading_symbol": symbols,
+                    "strike_price": strikes,
                     "option_type": chain["OPTION_TYPE"].values,
                     "expiry": expiry,
                 }))
-                for sym, sec_id in zip(chain["TRADING_SYMBOL"], chain["SECURITY_ID"]):
+                for sym, sec_id in zip(symbols, chain["SECURITY_ID"]):
                     code = f"{u.option_exchange.value}_{int(sec_id)}"
                     self._code_to_key[code] = (u.option_exchange.value, sym)
                     self._symbol_to_code[sym] = code
