@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -86,10 +87,14 @@ def read_csv(name: str, dates=("ts",)) -> pd.DataFrame:
 
 def read_snapshot() -> dict | None:
     path = STATE_DIR / "live.json"
-    try:
-        return json.loads(path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
+    for _ in range(5):
+        try:
+            return json.loads(path.read_text())
+        except PermissionError:  # Windows: the bot is swapping the file in right now
+            time.sleep(0.05)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+    return None
 
 
 def data_signature() -> tuple:

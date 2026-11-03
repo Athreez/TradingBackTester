@@ -272,7 +272,13 @@ class PaperBot:
         SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = SNAPSHOT_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(snap, indent=2, default=str))
-        tmp.replace(SNAPSHOT_PATH)
+        for _ in range(10):
+            try:
+                tmp.replace(SNAPSHOT_PATH)
+                return
+            except PermissionError:  # Windows: a dashboard has live.json open for a moment
+                _time.sleep(0.05)
+        log.warning("could not update %s (file in use); the next poll writes it again", SNAPSHOT_PATH.name)
 
     def _log_new_fills(self) -> None:
         for f in self.broker.fills()[self._fills_logged:]:
