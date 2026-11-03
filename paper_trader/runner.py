@@ -31,6 +31,7 @@ from core.costs import CostModel
 from core.models import Side
 from core.registry import load_strategy
 from core.strategy_base import Context
+from data.indmoney_auth import AuthError, LoginConflict
 from data.indmoney_client import IndMoneyClient
 from paper_trader.live_feed import LiveFeed, MemoryStore
 
@@ -44,6 +45,8 @@ PREPARE_AT, CLOSE_AT = time(9, 5), time(15, 35)
 BAR = timedelta(minutes=1)
 GRACE = timedelta(seconds=5)  # wait after a minute closes so the candle is published
 POLL_SECONDS = 5
+AUTH_BACKOFF_SECONDS = 65  # INDmoney allows one token per minute
+LOGIN_BACKOFF_SECONDS = 120
 
 log = logging.getLogger("paper")
 
@@ -193,6 +196,16 @@ class PaperBot:
             fetch_from = max(session_open, (self.last_bar or session_open) - 3 * BAR)
             try:
                 feed.poll(symbols, fetch_from, now)
+            except LoginConflict as e:  # someone else holds the login: don't fight over tokens
+                log.error("%s", e)
+                self._write_snapshot(data, f"login problem: {e}")
+                _pause(LOGIN_BACKOFF_SECONDS)
+                continue
+            except AuthError as e:  # e.g. token generation throttled: wait instead of hammering
+                log.warning("login failed, retrying in %ss: %s", AUTH_BACKOFF_SECONDS, e)
+                self._write_snapshot(data, f"login problem: {e}")
+                _pause(AUTH_BACKOFF_SECONDS)
+                continue
             except Exception as e:  # network hiccup: keep the bot alive, retry next poll
                 log.warning("poll failed: %s", e)
                 _pause(POLL_SECONDS)

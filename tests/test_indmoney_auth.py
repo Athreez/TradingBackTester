@@ -74,8 +74,8 @@ class FakeProvider:
     def __init__(self):
         self.n, self.forced = 1, 0
 
-    def __call__(self, force):
-        if force:
+    def __call__(self, rejected):
+        if rejected is not None:
             self.n += 1
             self.forced += 1
         return auth.Secret(f"tok{self.n}")
@@ -115,3 +115,80 @@ def test_client_picks_up_rotated_token_on_later_requests(monkeypatch):
     provider.n = 7  # e.g. the cached token was regenerated after 7 AM by another process
     client._json("/b")
     assert seen == ["tok1", "tok7"]
+
+
+# ---- several processes sharing one login --------------------------------------
+
+def _post_counter(monkeypatch, tokens):
+    calls = []
+
+    def fake_post(*a, **k):
+        calls.append(1)
+        return FakeResp(200, {"data": {"token": tokens[len(calls) - 1]}})
+
+    monkeypatch.setattr(auth.requests, "post", fake_post)
+    return calls
+
+
+def test_rejected_token_already_replaced_by_another_process_is_not_regenerated(totp_env, monkeypatch, tmp_path):
+    cache = tmp_path / "t.json"
+    calls = _post_counter(monkeypatch, ["new"])
+    auth._write_cache(cache, "from-other-process", datetime.now(IST) + timedelta(hours=5))
+    assert auth.get_token(cache_path=cache, rejected="my-old-token").get() == "from-other-process"
+    assert calls == []
+
+
+def test_young_token_rejected_raises_login_conflict(totp_env, monkeypatch, tmp_path):
+    cache = tmp_path / "t.json"
+    calls = _post_counter(monkeypatch, ["new"])
+    auth._write_cache(cache, "fresh", datetime.now(IST) + timedelta(hours=5), generated_at=datetime.now(IST))
+    with pytest.raises(auth.LoginConflict):
+        auth.get_token(cache_path=cache, rejected="fresh")
+    assert calls == []
+
+
+def test_old_token_rejected_is_regenerated(totp_env, monkeypatch, tmp_path):
+    cache = tmp_path / "t.json"
+    calls = _post_counter(monkeypatch, ["new"])
+    auth._write_cache(cache, "old", datetime.now(IST) + timedelta(hours=5),
+                      generated_at=datetime.now(IST) - timedelta(hours=1))
+    assert auth.get_token(cache_path=cache, rejected="old").get() == "new"
+    assert len(calls) == 1
+
+
+def test_two_processes_with_the_same_stale_token_generate_only_once(totp_env, monkeypatch, tmp_path):
+    cache = tmp_path / "t.json"
+    calls = _post_counter(monkeypatch, ["T1", "T2"])
+    auth._write_cache(cache, "T0", datetime.now(IST) + timedelta(hours=5),
+                      generated_at=datetime.now(IST) - timedelta(hours=1))
+    a = auth.get_token(cache_path=cache, rejected="T0")  # process A refreshes
+    b = auth.get_token(cache_path=cache, rejected="T0")  # process B's stale token: picks up A's
+    assert a.get() == b.get() == "T1" and len(calls) == 1
+
+
+def test_two_bots_sharing_a_login_do_not_ping_pong(totp_env, monkeypatch, tmp_path):
+    """Regression for 2026-11-03: only the latest token is valid server-side (as at INDmoney)."""
+    cache = tmp_path / "t.json"
+    server = {"valid": "T0", "generated": 0}
+
+    def fake_post(*a, **k):
+        server["generated"] += 1
+        server["valid"] = f"T{server['generated']}"
+        return FakeResp(200, {"data": {"token": server["valid"]}})
+
+    monkeypatch.setattr(auth.requests, "post", fake_post)
+    auth._write_cache(cache, "T0", datetime.now(IST) + timedelta(hours=5),
+                      generated_at=datetime.now(IST) - timedelta(hours=1))
+    server["valid"] = "someone-else"  # T0 got invalidated (e.g. 7 AM rotation)
+
+    bots = []
+    for _ in range(2):
+        c = IndMoneyClient(lambda rejected: auth.get_token(cache_path=cache, rejected=rejected),
+                           requests_per_second=1000)
+        monkeypatch.setattr(c._session, "get", lambda url, params, timeout, c=c: FakeResp(
+            200, {"data": {"ok": 1}}) if c._session.headers["Authorization"] == server["valid"] else FakeResp(403, {"error_type": "TokenException"}))
+        bots.append(c)
+    for _ in range(5):  # both bots keep polling
+        for c in bots:
+            assert c._json("/market/quotes/ltp") == {"ok": 1}
+    assert server["generated"] == 1

@@ -182,6 +182,8 @@ def live_status() -> None:
               if snap and snap.get("token_valid_until") else "–")
     if not running:
         st.warning("The bot is not running. Start it with `python -m paper_trader.runner`.", icon="⚠️")
+    elif snap and snap["phase"].startswith(("login problem", "loading contracts failed")):
+        st.error(snap["phase"], icon="🚫")
     elif age is not None and age > 60 and snap and snap["phase"] == "trading session":
         st.warning(f"No update for {age:.0f}s during the session. Check the log below.", icon="⚠️")
 

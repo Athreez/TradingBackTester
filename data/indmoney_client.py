@@ -69,7 +69,7 @@ def _candles_to_df(candles: list[dict] | None) -> pd.DataFrame:
     return df.set_index("ts").sort_index()
 
 
-TokenProvider = Callable[[bool], Secret]  # force_new -> token
+TokenProvider = Callable[[str | None], Secret]  # rejected token (or None) -> token to use
 
 
 def _is_auth_failure(resp: requests.Response) -> bool:
@@ -80,20 +80,20 @@ class IndMoneyClient:
     def __init__(self, token_provider: TokenProvider, requests_per_second: float = 4.0, max_retries: int = 5):
         self._token_provider = token_provider
         self._session = requests.Session()
-        self._session.headers["Authorization"] = token_provider(False).get()
+        self._session.headers["Authorization"] = token_provider(None).get()
         self._limiter = _RateLimiter(requests_per_second)
         self._max_retries = max_retries
 
     @classmethod
     def from_env(cls, **kwargs) -> "IndMoneyClient":
         from data.indmoney_auth import get_token
-        return cls(lambda force: get_token(force_new=force), **kwargs)
+        return cls(lambda rejected: get_token(rejected=rejected), **kwargs)
 
     # ---- plumbing -------------------------------------------------------
 
     def _get(self, path: str, params: dict | None = None) -> requests.Response:
         # Long-running bots: pick up the daily token (provider returns the cached one until it expires).
-        self._session.headers["Authorization"] = self._token_provider(False).get()
+        self._session.headers["Authorization"] = self._token_provider(None).get()
         refreshed = False
         for attempt in range(self._max_retries):
             self._limiter.wait()
@@ -108,7 +108,8 @@ class IndMoneyClient:
                     raise IndMoneyError(f"Unauthorized (HTTP {resp.status_code}) even after refreshing the token: "
                                         f"{resp.text[:300]}")
                 log.warning("Access token rejected (HTTP %s); refreshing", resp.status_code)
-                self._session.headers["Authorization"] = self._token_provider(True).get()
+                rejected = self._session.headers["Authorization"]
+                self._session.headers["Authorization"] = self._token_provider(rejected).get()
                 refreshed = True
                 continue
             if not resp.ok:
