@@ -15,7 +15,7 @@ import pandas as pd
 
 from data.indmoney_client import IndMoneyClient
 from data.store import DataStore
-from data.underlyings import get_underlying, index_spec
+from data.underlyings import get_underlying, index_spec, option_symbol  # noqa: F401 (re-exported)
 
 log = logging.getLogger(__name__)
 
@@ -24,10 +24,6 @@ IST = timezone(timedelta(hours=5, minutes=30))
 SESSION_OPEN = time(9, 15)
 
 
-def option_symbol(underlying: str, expiry: date, strike: float, option_type: str) -> str:
-    """Unique per contract, in the format INDmoney uses for expired weeklies (NIFTY26NOV0323600PE).
-    The live master's TRADING_SYMBOL (NIFTY-Nov2026-23600-PE) is shared by every expiry in the month."""
-    return f"{underlying}{expiry:%y%b%d}".upper() + f"{strike:g}{option_type}"
 
 
 class MemoryStore(DataStore):

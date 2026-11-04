@@ -22,8 +22,7 @@ from datetime import date, time
 import pandas as pd
 
 from data.store import DataStore
-from data.underlyings import UNDERLYINGS
-from paper_trader.live_feed import option_symbol
+from data.underlyings import UNDERLYINGS, option_symbol
 
 INTERVAL = "1minute"
 FULL_SESSION = 375  # 09:15..15:29 (INDmoney also sends a 15:30 candle)

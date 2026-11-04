@@ -16,11 +16,13 @@ import argparse
 import logging
 from datetime import date, datetime, time, timedelta
 
+import pandas as pd
+
 from core.config import load_env
 from data.indmoney_auth import generate_token, token_status, totp_configured
-from data.indmoney_client import IndMoneyClient
+from data.indmoney_client import MAX_LIVE_SCRIPS, IndMoneyClient, IndMoneyError
 from data.store import DataStore
-from data.underlyings import SIGNAL_INDICES, UNDERLYINGS, get_underlying, index_spec
+from data.underlyings import SIGNAL_INDICES, UNDERLYINGS, get_underlying, index_spec, option_symbol
 
 log = logging.getLogger("downloader")
 
@@ -93,6 +95,62 @@ def download_options(client, store, underlying: str, start: date, end: date, int
                  underlying, expiry, len(frames), len(symbols), lo, hi)
 
 
+def _historical_skipping_invalid(client, codes: list[str], interval: str, start: datetime, end: datetime) -> dict:
+    """One unknown code makes INDmoney reject its whole batch of 5 ("Invalid scrip codes"); retry that
+    batch code by code and skip the bad ones."""
+    out = {}
+    for i in range(0, len(codes), MAX_LIVE_SCRIPS):
+        batch = codes[i:i + MAX_LIVE_SCRIPS]
+        try:
+            out.update(client.historical(batch, interval, start, end))
+        except IndMoneyError as e:
+            if "Invalid scrip codes" not in str(e):
+                raise
+            for code in batch:
+                try:
+                    out.update(client.historical([code], interval, start, end))
+                except IndMoneyError as e2:
+                    if "Invalid scrip codes" not in str(e2):
+                        raise
+                    log.warning("skipping %s: INDmoney does not recognise it for historical data", code)
+    return out
+
+
+def download_live_options(client, store, underlying: str, start: date, end: date, interval: str,
+                          days_before: int, strike_buffer: float) -> None:
+    """Contracts that have NOT expired yet (e.g. this week's) are not in the expired endpoints; take them
+    from the live instrument master and fetch their candles by scrip code, saved under the same
+    symbols the expired data uses, so a later expired download merges into them."""
+    u = get_underlying(underlying)
+    index_df = store.load_candles(interval, u.index_exchange.value, underlying)
+    master = client.instruments("fno")
+    rows = master[master["TRADING_SYMBOL"].astype(str).str.startswith(f"{underlying}-")
+                  & master["OPTION_TYPE"].isin(["CE", "PE"])].copy()
+    rows["expiry"] = pd.to_datetime(rows["EXPIRY_DATE"], format="%m/%d/%Y %H:%M").dt.date
+    expiries = sorted(e for e in rows["expiry"].unique() if e >= start and e - timedelta(days=days_before) <= end)
+    for expiry in expiries:
+        w_start = datetime.combine(expiry - timedelta(days=days_before), time.min)
+        w_end = datetime.combine(min(expiry, end) + timedelta(days=1), time.min)
+        spot = index_df.loc[w_start:w_end]
+        if spot.empty:
+            log.warning("%s %s (live): no index data in window, skipping", underlying, expiry)
+            continue
+        lo, hi = spot["low"].min() * (1 - strike_buffer), spot["high"].max() * (1 + strike_buffer)
+        chain = rows[rows["expiry"] == expiry]
+        strikes = chain["STRIKE_PRICE"].astype(float)
+        symbols = [option_symbol(underlying, expiry, k, t) for k, t in zip(strikes, chain["OPTION_TYPE"])]
+        store.save_contracts(underlying, expiry, pd.DataFrame({
+            "trading_symbol": symbols, "strike_price": strikes.values,
+            "option_type": chain["OPTION_TYPE"].values, "expiry": expiry}))
+        wanted = {f"{u.option_exchange.value}_{int(sid)}": sym
+                  for sym, k, sid in zip(symbols, strikes, chain["SECURITY_ID"]) if lo <= k <= hi}
+        frames = _historical_skipping_invalid(client, list(wanted), interval, w_start, w_end)
+        for code, df in frames.items():
+            store.save_candles(interval, u.option_exchange.value, wanted[code], df)
+        log.info("%s %s (not expired yet): saved %d/%d option series up to %s (strikes %.0f-%.0f)",
+                 underlying, expiry, len(frames), len(wanted), min(expiry, end), lo, hi)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -133,6 +191,8 @@ def main() -> None:
     else:
         download_options(client, store, args.underlying, args.start, args.end, args.interval,
                          args.days_before, args.strike_buffer)
+        download_live_options(client, store, args.underlying, args.start, args.end, args.interval,
+                              args.days_before, args.strike_buffer)
 
 
 if __name__ == "__main__":

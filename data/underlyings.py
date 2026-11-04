@@ -60,3 +60,9 @@ def index_spec(name: str) -> tuple[str, Exchange]:
     if key in SIGNAL_INDICES:
         return SIGNAL_INDICES[key]
     raise ValueError(f"Unknown index '{name}'. Known: {list(UNDERLYINGS) + list(SIGNAL_INDICES)}")
+
+
+def option_symbol(underlying: str, expiry: date, strike: float, option_type: str) -> str:
+    """Unique per contract, in the format INDmoney uses for expired weeklies (NIFTY26NOV0323600PE).
+    The live master's TRADING_SYMBOL (NIFTY-Nov2026-23600-PE) is shared by every expiry in the month."""
+    return f"{underlying}{expiry:%y%b%d}".upper() + f"{strike:g}{option_type}"
