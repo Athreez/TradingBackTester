@@ -14,6 +14,7 @@ from datetime import date, datetime, time, timedelta
 
 from core.models import Fill, Instrument, OptionType
 from core.strategy_base import Context, Strategy
+from data.underlyings import get_underlying
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,15 @@ class VixIronFly(Strategy):
             if expiries and (best is None or expiries[0] < best[0]):
                 best = (expiries[0], underlying, cfg)
         return best and (best[1], best[2])
+
+    @staticmethod
+    def _hedge_distance(underlying: str, cfg: dict, spot: float) -> float:
+        """Points from ATM to each hedge: `hedge_pct` of spot rounded to the strike step (at least one
+        step), or a fixed `hedge_distance`."""
+        if "hedge_pct" not in cfg:
+            return cfg["hedge_distance"]
+        step = get_underlying(underlying).strike_step
+        return max(step, round(spot * float(cfg["hedge_pct"]) / 100 / step) * step)
 
     def _reset_day(self, ctx: Context, today: date) -> None:
         self._day = today
@@ -139,7 +149,7 @@ class VixIronFly(Strategy):
             return
 
         atm = min({i.strike for i in chain}, key=lambda s: abs(s - spot))
-        dist = cfg["hedge_distance"]
+        dist = self._hedge_distance(underlying, cfg, spot)
         legs = {
             "short_ce": ctx.data.find_option(underlying, expiry, atm, OptionType.CE),
             "short_pe": ctx.data.find_option(underlying, expiry, atm, OptionType.PE),

@@ -10,8 +10,9 @@ from strategies.vix_iron_fly.strategy import VixIronFly
 
 DAY = "2025-09-08"  # Monday -> NIFTY
 EXPIRY = date(2025, 9, 9)
-# Fixed 50% SL and no VIX gating, so these tests don't depend on config.yaml defaults.
-BASE = {"vix_regimes": [], "stop_loss_pct": 50, "skip_expiry_day": False, "vix_min": None, "vix_max": None}
+# Fixed 50% SL, +/-400 hedges and no VIX gating, so these tests don't depend on config.yaml defaults.
+BASE = {"vix_regimes": [], "stop_loss_pct": 50, "skip_expiry_day": False, "vix_min": None, "vix_max": None,
+        "schedule": {"NIFTY": {"hedge_distance": 400, "lots": 1}, "SENSEX": {"hedge_distance": 1300, "lots": 1}}}
 SYMS = {
     ("CE", 24000): "NIFTY25SEP0924000CE", ("PE", 24000): "NIFTY25SEP0924000PE",
     ("CE", 24400): "NIFTY25SEP0924400CE", ("PE", 23600): "NIFTY25SEP0923600PE",

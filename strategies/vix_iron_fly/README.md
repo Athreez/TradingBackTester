@@ -11,10 +11,12 @@ schedule follows the exchanges' expiry weekdays:
 | since Sep 2025: NIFTY Tue, SENSEX Thu | Mon, Tue, Fri | Wed, Thu      |
 | until Aug 2025: NIFTY Thu, SENSEX Tue | Wed, Thu      | Mon, Tue, Fri |
 
-| Underlying | Hedge distance | Lots |
-|------------|----------------|------|
-| NIFTY      | ATM +/- 400    | 1    |
-| SENSEX     | ATM +/- 1300   | 1    |
+| Underlying | Hedge distance                          | Lots |
+|------------|-----------------------------------------|------|
+| NIFTY      | ATM +/- 2% of spot, nearest 50 points   | 1    |
+| SENSEX     | ATM +/- 2% of spot, nearest 100 points  | 1    |
+
+A fixed `hedge_distance` (points) can be set instead of `hedge_pct`.
 
 Expiry days are traded. Lot sizes come from `data/underlyings.py` by expiry date.
 
@@ -32,9 +34,10 @@ Expiry days are traded. Lot sizes come from `data/underlyings.py` by expiry date
 - **Exit 14:45:** square off everything still open.
 - One trade per day, no re-entry.
 
-Backtest, 2 Apr 2025 - 3 Nov 2026, 1 lot, Zerodha charges: net +95,263
-(+19.1%), max drawdown -22,938, 208 days traded, 65% winners (Apr - Aug 2025:
-53 days, +42,449; Sep 2025 onwards: 155 days, +52,814). VIX thresholds and stop
+Backtest, 2 Apr 2025 - 3 Nov 2026, 1 lot, Zerodha charges: net +1,03,209
+(+20.6%), max drawdown -23,306, 208 days traded, 65% winners (Apr - Aug 2025:
+53 days, +47,446; Sep 2025 onwards: 155 days, +55,763). Fixed +/-400 NIFTY,
++/-1300 SENSEX hedges: net +95,263. VIX thresholds and stop
 levels were chosen on the Sep 2025 onwards data, so only Apr - Aug 2025 is
 out-of-sample. INDmoney has no expired contracts before Apr 2025.
 
