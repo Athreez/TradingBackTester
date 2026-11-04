@@ -37,6 +37,11 @@ class VixIronFly(Strategy):
         # Optional VIX regimes: first match sets the day's SL; no match -> no trade.
         # e.g. [{vix_below: 11, stop_loss_pct: 40}, {vix_above: 14, stop_loss_pct: 30}]
         self.vix_regimes = params.get("vix_regimes") or []
+        # A hedge strike is liquid if each of the last `lookback` 1-min bars before entry traded and
+        # together they traded at least `min_lots` lots; otherwise fall back to the nearest round strike.
+        liq = params.get("hedge_liquidity") or {}
+        self.liq_lookback = int(liq.get("lookback_minutes", 5))
+        self.liq_min_lots = float(liq.get("min_lots", 0))
         self.on_stop_loss = params.get("on_stop_loss", "exit_all")
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
@@ -60,6 +65,32 @@ class VixIronFly(Strategy):
             return cfg["hedge_distance"]
         step = get_underlying(underlying).strike_step
         return max(step, round(spot * float(cfg["hedge_pct"]) / 100 / step) * step)
+
+    def _is_liquid(self, ctx: Context, inst: Instrument) -> bool:
+        bars = ctx.data.history(inst, self.liq_lookback)
+        bars = bars[bars.index.date == self._day]
+        return (len(bars) == self.liq_lookback and bool((bars["volume"] > 0).all())
+                and bars["volume"].sum() >= self.liq_min_lots * inst.lot_size)
+
+    def _pick_hedge(self, ctx: Context, underlying: str, cfg: dict, expiry: date, atm: float,
+                    target: float, option_type: OptionType) -> tuple[Instrument | None, str]:
+        """The target strike if liquid, else the nearest liquid round strike (ties: nearer ATM)."""
+        inst = ctx.data.find_option(underlying, expiry, target, option_type)
+        if inst is None:
+            return None, f"{target:.0f}{option_type.value} not listed"
+        if self.liq_min_lots <= 0 or self._is_liquid(ctx, inst):
+            return inst, ""
+        why = f"{target:.0f}{option_type.value} illiquid"
+        step = cfg.get("round_strike")
+        if not step:
+            return None, why
+        below = target // step * step
+        rounds = [k for k in (below, below + step) if k != target and (k > atm if option_type is OptionType.CE else k < atm)]
+        for k in sorted(rounds, key=lambda k: (abs(k - target), abs(k - atm))):
+            alt = ctx.data.find_option(underlying, expiry, k, option_type)
+            if alt is not None and self._is_liquid(ctx, alt):
+                return alt, f"{why}, used {k:.0f}{option_type.value}"
+        return None, f"{why}, no liquid round strike"
 
     def _reset_day(self, ctx: Context, today: date) -> None:
         self._day = today
@@ -150,17 +181,23 @@ class VixIronFly(Strategy):
 
         atm = min({i.strike for i in chain}, key=lambda s: abs(s - spot))
         dist = self._hedge_distance(underlying, cfg, spot)
+        hedge_ce, why_ce = self._pick_hedge(ctx, underlying, cfg, expiry, atm, atm + dist, OptionType.CE)
+        hedge_pe, why_pe = self._pick_hedge(ctx, underlying, cfg, expiry, atm, atm - dist, OptionType.PE)
         legs = {
             "short_ce": ctx.data.find_option(underlying, expiry, atm, OptionType.CE),
             "short_pe": ctx.data.find_option(underlying, expiry, atm, OptionType.PE),
-            "hedge_ce": ctx.data.find_option(underlying, expiry, atm + dist, OptionType.CE),
-            "hedge_pe": ctx.data.find_option(underlying, expiry, atm - dist, OptionType.PE),
+            "hedge_ce": hedge_ce,
+            "hedge_pe": hedge_pe,
         }
+        hedge_notes = "; ".join(w for w in (why_ce, why_pe) if w)
         missing = [k for k, v in legs.items() if v is None]
         if missing:
-            log.warning("%s %s: strikes missing %s (atm %s), skipping day", self._day, underlying, missing, atm)
-            self.note = f"strikes missing {missing}, no trade"
+            log.warning("%s %s: no usable strike for %s (atm %s) %s, skipping day", self._day, underlying, missing,
+                        atm, hedge_notes)
+            self.note = f"no usable strike for {missing}{f' ({hedge_notes})' if hedge_notes else ''}, no trade"
             return
+        if hedge_notes:
+            log.info("%s %s: %s", self._day, underlying, hedge_notes)
 
         self.lots = int(cfg["lots"])
         self.hedges = {OptionType.CE: legs["hedge_ce"], OptionType.PE: legs["hedge_pe"]}
@@ -171,4 +208,6 @@ class VixIronFly(Strategy):
         ctx.sell(legs["short_pe"], self.lots, tag="short:PE")
         self.state = "OPEN"
         self.note = f"entered: ATM {atm:.0f}, expiry {expiry}, SL {self.day_sl_pct:.0%}"
+        if hedge_notes:
+            self.note += f" ({hedge_notes})"
         log.info("%s %s: entered fly atm=%s spot=%.2f expiry=%s", self._day, underlying, atm, spot, expiry)

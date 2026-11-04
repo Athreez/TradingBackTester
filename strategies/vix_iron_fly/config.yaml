@@ -26,10 +26,17 @@ params:
   vix_max: null
   # Each day trades the underlying whose weekly expiry is soonest (ties: first listed). With
   # NIFTY expiring Tue and SENSEX Thu that is NIFTY Mon/Tue/Fri, SENSEX Wed/Thu.
+  # Illiquid hedge (any of the 5 bars before entry untraded, or < 500 lots in total) -> nearest
+  # round_strike instead (ties: nearer ATM); if that is illiquid too, no trade.
+  hedge_liquidity:
+    lookback_minutes: 5
+    min_lots: 500
   schedule:
     NIFTY:
       hedge_pct: 2.0         # hedges at ATM +/- 2% of spot, rounded to the strike step (50)
+      round_strike: 100
       lots: 1
     SENSEX:
       hedge_pct: 2.0         # strike step 100
+      round_strike: 500
       lots: 1

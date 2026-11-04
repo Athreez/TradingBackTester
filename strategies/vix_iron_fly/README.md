@@ -18,6 +18,12 @@ schedule follows the exchanges' expiry weekdays:
 
 A fixed `hedge_distance` (points) can be set instead of `hedge_pct`.
 
+If a hedge strike is illiquid at entry (any of the 5 one-minute bars before 09:22
+untraded, or under 500 lots traded in total), the nearest round strike is used
+instead (NIFTY multiples of 100, SENSEX of 500; ties go nearer ATM). If that is
+illiquid too, the day is skipped. In the Apr 2025 - Nov 2026 data the thinnest
+2% hedge still traded ~4,700 lots in those 5 minutes, so the fallback never fired.
+
 Expiry days are traded. Lot sizes come from `data/underlyings.py` by expiry date.
 
 | India VIX at entry | Action                     |
