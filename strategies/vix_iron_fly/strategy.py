@@ -4,7 +4,8 @@ At entry_time: buy hedges at ATM +/- hedge_distance, sell ATM CE + PE.
 Each short leg gets a stop-loss at entry * (1 + stop_loss_pct/100). When one
 fires: `exit_all` (default) squares off every remaining leg and stops for the
 day; `exit_side` only sells that side's hedge. Anything left is squared off at exit_time.
-Which underlying trades depends on the weekday (see config.yaml `schedule`).
+Each day trades the `schedule` underlying whose weekly expiry comes soonest (ties: first listed), so the
+choice follows the exchanges' expiry weekdays as they change (NIFTY Tue / SENSEX Thu since Sep 2025).
 """
 from __future__ import annotations
 
@@ -15,8 +16,6 @@ from core.models import Fill, Instrument, OptionType
 from core.strategy_base import Context, Strategy
 
 log = logging.getLogger(__name__)
-
-WEEKDAYS = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4}
 
 
 def _matches(regime: dict, vix: float) -> bool:
@@ -40,30 +39,34 @@ class VixIronFly(Strategy):
         self.on_stop_loss = params.get("on_stop_loss", "exit_all")
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
-        self.by_weekday: dict[int, tuple[str, dict]] = {}
-        for underlying, cfg in params["schedule"].items():
-            for day in cfg["days"]:
-                if WEEKDAYS[day] in self.by_weekday:
-                    raise ValueError(f"{day} is scheduled for more than one underlying")
-                self.by_weekday[WEEKDAYS[day]] = (underlying, cfg)
+        self.schedule: dict[str, dict] = params["schedule"]
         self._day: date | None = None
 
-    def _reset_day(self, today: date) -> None:
+    def _pick_underlying(self, ctx: Context, today: date) -> tuple[str, dict] | None:
+        """The scheduled underlying with the soonest live expiry."""
+        best = None
+        for underlying, cfg in self.schedule.items():
+            expiries = [e for e in ctx.data.expiries(underlying) if e >= today]
+            if expiries and (best is None or expiries[0] < best[0]):
+                best = (expiries[0], underlying, cfg)
+        return best and (best[1], best[2])
+
+    def _reset_day(self, ctx: Context, today: date) -> None:
         self._day = today
         self.state = "IDLE"  # IDLE -> OPEN -> DONE
-        self.today = self.by_weekday.get(today.weekday())  # (underlying, cfg) or None
+        self.today = self._pick_underlying(ctx, today)  # (underlying, cfg) or None
         self.hedges: dict[OptionType, Instrument] = {}
         self.lots = 0
         self.day_sl_pct = self.sl_pct
         self.day_vix: float | None = None
-        self.note = "no trade scheduled today" if self.today is None else "waiting for entry time"
+        self.note = "no expiry data for any underlying" if self.today is None else "waiting for entry time"
 
     # ---- lifecycle ------------------------------------------------------
 
     def on_bar(self, ctx: Context) -> None:
         clock = ctx.data.bar_end()
         if clock.date() != self._day:
-            self._reset_day(clock.date())
+            self._reset_day(ctx, clock.date())
         if self.today is None or self.state == "DONE":
             return
 
