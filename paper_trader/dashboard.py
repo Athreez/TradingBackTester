@@ -151,6 +151,40 @@ def pnl_bars(df: pd.DataFrame, c: dict) -> alt.Chart:
     return style((zero + bars).properties(height=260), c)
 
 
+def closed_positions(fills: pd.DataFrame) -> pd.DataFrame:
+    """Contracts opened and fully closed within these fills, with realized P&L (before and after charges)."""
+    rows = []
+    for symbol, f in fills.sort_values("ts").groupby("symbol", sort=False):
+        signed = f["qty"].where(f["side"] == "BUY", -f["qty"])
+        if signed.sum() != 0:
+            continue  # still open
+        opening = f["side"] == f["side"].iloc[0]
+        value = f["qty"] * f["price"]
+        realized = value.where(f["side"] == "SELL", -value).sum()
+        rows.append({
+            "Contract": symbol, "Qty (− = short)": int(signed[opening].sum()),
+            "Entry": value[opening].sum() / f.loc[opening, "qty"].sum(),
+            "Exit": value[~opening].sum() / f.loc[~opening, "qty"].sum(),
+            "Closed at": f.loc[~opening, "ts"].max().strftime("%H:%M"),
+            "Realized P&L": realized, "Charges": f["charges"].sum(), "Net P&L": realized - f["charges"].sum(),
+        })
+    return pd.DataFrame(rows)
+
+
+def with_total(df: pd.DataFrame, sum_cols: list[str]):
+    """df plus a bold Total row summing sum_cols; other cells of that row are left blank."""
+    total = {col: df[col].sum() if col in sum_cols else None for col in df.columns}
+    total[df.columns[0]] = "Total"
+    out = pd.concat([df, pd.DataFrame([total])], ignore_index=True)
+    for col in out.columns:  # keep whole-number columns whole despite the blank total cell
+        if col not in sum_cols and pd.api.types.is_integer_dtype(df[col]):
+            out[col] = out[col].astype("Int64")
+    floats = [col for col in out.columns if pd.api.types.is_float_dtype(out[col])]
+    bold = ["font-weight: bold"] * len(out.columns)
+    return (out.style.format("{:,.2f}", subset=floats, na_rep="").format(na_rep="")
+            .apply(lambda r: bold if r.name == len(out) - 1 else [""] * len(r), axis=1))
+
+
 # ---- page ----------------------------------------------------------------
 
 st.set_page_config(page_title="Paper Trading Bot", page_icon="📈", layout="wide")
@@ -231,7 +265,7 @@ def dashboard() -> None:
         if snap["positions"]:
             pos = pd.DataFrame(snap["positions"]).rename(columns={
                 "symbol": "Contract", "qty": "Qty (− = short)", "avg_price": "Entry", "ltp": "Last", "unrealized": "Unrealized P&L"})
-            st.dataframe(pos, hide_index=True, width="stretch")
+            st.dataframe(with_total(pos, ["Unrealized P&L"]), hide_index=True, width="stretch")
         else:
             st.caption("No open positions.")
     with right:
@@ -242,6 +276,13 @@ def dashboard() -> None:
             st.dataframe(orders, hide_index=True, width="stretch")
         else:
             st.caption("No pending orders.")
+
+    st.markdown("**Closed positions today**")
+    closed = closed_positions(today_fills) if not today_fills.empty else pd.DataFrame()
+    if not closed.empty:
+        st.dataframe(with_total(closed, ["Realized P&L", "Charges", "Net P&L"]), hide_index=True, width="stretch")
+    else:
+        st.caption("No closed positions today.")
 
     st.markdown("**Today's fills**")
     if not today_fills.empty:
