@@ -6,7 +6,7 @@ live in `config.yaml`.
 | Day            | Underlying | Hedge distance | Lots |
 |----------------|------------|----------------|------|
 | Mon, Tue, Fri  | NIFTY      | ATM +/- 400    | 1    |
-| Wed, Thu       | SENSEX     | ATM +/- 1000   | 1    |
+| Wed, Thu       | SENSEX     | ATM +/- 1300   | 1    |
 
 Expiry days (NIFTY Tue, SENSEX Thu) are traded.
 

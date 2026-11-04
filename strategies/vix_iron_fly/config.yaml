@@ -31,5 +31,5 @@ params:
       lots: 1
     SENSEX:
       days: [WED, THU]
-      hedge_distance: 1000
+      hedge_distance: 1300
       lots: 1
