@@ -86,6 +86,19 @@ def _next_session_day(after: date) -> date:
     return d
 
 
+def _replace(tmp: Path, target: Path) -> bool:
+    """Atomically swap tmp into target. On Windows a reader (dashboard, antivirus, search indexer) can hold
+    target open for a moment, so retry briefly; on failure log and let the next write try again."""
+    for _ in range(20):
+        try:
+            tmp.replace(target)
+            return True
+        except PermissionError:
+            _time.sleep(0.05)
+    log.warning("could not update %s (file in use); the next write tries again", target.name)
+    return False
+
+
 def _append_csv(path: Path, row: dict) -> None:
     new = not path.exists()
     with path.open("a", newline="") as f:
@@ -140,7 +153,7 @@ class PaperBot:
             "strategy_name": self.strategy_name, "broker": broker_state, "strategy": self.strategy,
             "last_bar": self.last_bar, "day": self.day, "day_closed": self.day_closed,
         }))
-        tmp.replace(STATE_PATH)
+        _replace(tmp, STATE_PATH)
 
     # ---- day lifecycle --------------------------------------------------
 
@@ -272,13 +285,7 @@ class PaperBot:
         SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = SNAPSHOT_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(snap, indent=2, default=str))
-        for _ in range(10):
-            try:
-                tmp.replace(SNAPSHOT_PATH)
-                return
-            except PermissionError:  # Windows: a dashboard has live.json open for a moment
-                _time.sleep(0.05)
-        log.warning("could not update %s (file in use); the next poll writes it again", SNAPSHOT_PATH.name)
+        _replace(tmp, SNAPSHOT_PATH)
 
     def _log_new_fills(self) -> None:
         for f in self.broker.fills()[self._fills_logged:]:
