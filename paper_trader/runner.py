@@ -89,6 +89,19 @@ def _next_session_day(after: date) -> date:
     return d
 
 
+def _replace(tmp: Path, target: Path) -> bool:
+    """Atomically swap tmp into target. On Windows a reader (dashboard, antivirus, search indexer) can hold
+    target open for a moment, so retry briefly; on failure log and let the next write try again."""
+    for _ in range(20):
+        try:
+            tmp.replace(target)
+            return True
+        except PermissionError:
+            _time.sleep(0.05)
+    log.warning("could not update %s (file in use); the next write tries again", target.name)
+    return False
+
+
 def _append_csv(path: Path, row: dict) -> None:
     new = not path.exists()
     with path.open("a", newline="") as f:
@@ -245,7 +258,7 @@ def save_state(path: Path, strategy_name: str, broker: SimBroker, strategy, last
         "strategy_name": strategy_name, "broker": broker_state, "strategy": strategy,
         "last_bar": last_bar, "day": day, "day_closed": day_closed,
     }))
-    tmp.replace(path)
+    _replace(tmp, path)
 
 
 def log_fills(fills, log_dir: Path) -> None:
@@ -332,13 +345,7 @@ def write_snapshot(path: Path, *, phase: str, strategy_name: str, broker: SimBro
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(snap, indent=2, default=str))
-    for _ in range(10):
-        try:
-            tmp.replace(path)
-            return
-        except PermissionError:  # Windows: a dashboard has live.json open for a moment
-            _time.sleep(0.05)
-    log.warning("could not update %s (file in use); the next poll writes it again", path.name)
+    _replace(tmp, path)
 
 
 def main() -> None:

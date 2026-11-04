@@ -1,15 +1,19 @@
 from datetime import date, datetime
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 from backtester.run import run_backtest
 from data.store import DataStore
+from strategies.vix_iron_fly.strategy import VixIronFly
 
 DAY = "2025-09-08"  # Monday -> NIFTY
 EXPIRY = date(2025, 9, 9)
-# Fixed 50% SL and no VIX gating, so these tests don't depend on config.yaml defaults.
-BASE = {"vix_regimes": [], "stop_loss_pct": 50, "skip_expiry_day": False, "vix_min": None, "vix_max": None}
+# Fixed 50% SL, +/-400 hedges, no VIX gating or hedge liquidity check, so these tests don't depend on config.yaml defaults.
+BASE = {"vix_regimes": [], "stop_loss_pct": 50, "skip_expiry_day": False, "vix_min": None, "vix_max": None,
+        "hedge_liquidity": {"min_lots": 0},
+        "schedule": {"NIFTY": {"hedge_distance": 400, "lots": 1}, "SENSEX": {"hedge_distance": 1300, "lots": 1}}}
 SYMS = {
     ("CE", 24000): "NIFTY25SEP0924000CE", ("PE", 24000): "NIFTY25SEP0924000PE",
     ("CE", 24400): "NIFTY25SEP0924400CE", ("PE", 23600): "NIFTY25SEP0923600PE",
@@ -132,3 +136,55 @@ def test_vix_regimes(store, vix, expected_sl_pct):
     short_ce = fills[("short:CE", "NIFTY25SEP0924000CE")].price
     sl = fills[("sl:CE", "NIFTY25SEP0924000CE")]
     assert sl.price == pytest.approx(round(short_ce * (1 + expected_sl_pct), 2) * 1.0005)
+
+
+@pytest.mark.parametrize("nifty, sensex, expected", [
+    ([date(2025, 9, 9)], [date(2025, 9, 11)], "NIFTY"),     # Mon after Sep 2025: NIFTY Tue < SENSEX Thu
+    ([date(2025, 4, 10)], [date(2025, 4, 8)], "SENSEX"),    # before: SENSEX Tue < NIFTY Thu
+    ([date(2025, 9, 9)], [date(2025, 9, 9)], "NIFTY"),      # tie -> first listed
+    ([date(2025, 9, 5), date(2025, 9, 9)], [], "NIFTY"),    # past expiries ignored; no SENSEX data
+    ([], [], None),
+])
+def test_trades_underlying_with_soonest_expiry(nifty, sensex, expected):
+    expiries = {"NIFTY": nifty, "SENSEX": sensex}
+    ctx = SimpleNamespace(data=SimpleNamespace(expiries=lambda u: expiries[u]))
+    st = VixIronFly({**BASE, "entry_time": "09:22", "exit_time": "14:45",
+                     "schedule": {"NIFTY": {"hedge_distance": 400, "lots": 1},
+                                  "SENSEX": {"hedge_distance": 1300, "lots": 1}}})
+    picked = st._pick_underlying(ctx, date(2025, 9, 8) if expected != "SENSEX" else date(2025, 4, 7))
+    assert (picked[0] if picked else None) == expected
+
+
+@pytest.mark.parametrize("underlying, cfg, spot, expected", [
+    ("NIFTY", {"hedge_pct": 1.7}, 24010, 400),        # 408 -> nearest 50
+    ("SENSEX", {"hedge_pct": 2.0}, 77254.71, 1500),   # 1545 -> nearest 100
+    ("NIFTY", {"hedge_pct": 0.01}, 24010, 50),        # never below one strike step
+    ("NIFTY", {"hedge_distance": 400}, 24010, 400),   # fixed points still supported
+])
+def test_hedge_distance(underlying, cfg, spot, expected):
+    assert VixIronFly._hedge_distance(underlying, cfg, spot) == expected
+
+
+LIQUID = {"hedge_liquidity": {"lookback_minutes": 5, "min_lots": 10},
+          "schedule": {"NIFTY": {"hedge_distance": 400, "round_strike": 500, "lots": 1}}}
+
+
+@pytest.mark.parametrize("ce_400_volume, ce_500_volume, expected_hedge_ce", [
+    (1000.0, 1000.0, "NIFTY25SEP0924400CE"),   # target strike liquid -> used
+    (1.0, 1000.0, "NIFTY25SEP0924500CE"),      # target thin -> nearest round strike (500s)
+    (1.0, 1.0, None),                          # round strike thin too -> no trade
+])
+def test_illiquid_hedge_falls_back_to_round_strike(store, ce_400_volume, ce_500_volume, expected_hedge_ce):
+    for sym, v in [("NIFTY25SEP0924400CE", ce_400_volume), ("NIFTY25SEP0924500CE", ce_500_volume),
+                   ("NIFTY25SEP0923600PE", 1000.0)]:
+        store.save_candles("1minute", "NFO", sym, _day(flat(20)).assign(volume=v))
+    contracts = store.load_contracts("NIFTY", EXPIRY)
+    extra = contracts.iloc[[0]].assign(trading_symbol="NIFTY25SEP0924500CE", strike_price=24500.0, option_type="CE")
+    store.save_contracts("NIFTY", EXPIRY, pd.concat([contracts, extra], ignore_index=True))
+
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, **LIQUID, "on_stop_loss": "exit_side"})
+    hedges = [f.instrument.symbol for f in result.fills if f.tag == "hedge:CE"]
+    assert hedges == ([expected_hedge_ce] if expected_hedge_ce else [])
+    if expected_hedge_ce is None:
+        assert result.fills == []
