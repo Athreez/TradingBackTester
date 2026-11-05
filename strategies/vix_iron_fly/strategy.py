@@ -19,6 +19,11 @@ from data.underlyings import get_underlying
 log = logging.getLogger(__name__)
 
 
+def _tick(price: float, tick: float = 0.05) -> float:
+    """Round to the exchange tick size (INDmoney GTT triggers must be tick multiples)."""
+    return round(round(price / tick) * tick, 2)
+
+
 def _matches(regime: dict, vix: float) -> bool:
     below, above = regime.get("vix_below"), regime.get("vix_above")
     return (below is None or vix < below) and (above is None or vix > above)
@@ -43,6 +48,15 @@ class VixIronFly(Strategy):
         self.liq_lookback = int(liq.get("lookback_minutes", 5))
         self.liq_min_lots = float(liq.get("min_lots", 0))
         self.on_stop_loss = params.get("on_stop_loss", "exit_all")
+        # Stop-loss order: SL-M (`market`) or INDmoney GTT-style stop-limit (`limit`) with the limit
+        # `limit_buffer_pct` above the trigger; a triggered stop still unfilled after
+        # `chase_after_minutes` is cancelled and replaced by a market buy.
+        stop = params.get("stop_order") or {}
+        self.stop_type = stop.get("type", "market")
+        if self.stop_type not in ("market", "limit"):
+            raise ValueError("stop_order.type must be 'market' or 'limit'")
+        self.stop_buffer = float(stop.get("limit_buffer_pct", 5)) / 100
+        self.chase_after = timedelta(minutes=int(stop.get("chase_after_minutes", 1)))
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
         self.schedule: dict[str, dict] = params["schedule"]
@@ -65,6 +79,15 @@ class VixIronFly(Strategy):
             return cfg["hedge_distance"]
         step = get_underlying(underlying).strike_step
         return max(step, round(spot * float(cfg["hedge_pct"]) / 100 / step) * step)
+
+    def _chase_stops(self, ctx: Context, clock: datetime) -> None:
+        """A stop-limit that triggered but price ran past its limit: replace it with a market buy."""
+        for order in ctx.broker.open_orders():
+            if order.tag.startswith("sl:") and order.triggered_at and clock - order.triggered_at >= self.chase_after:
+                ctx.broker.cancel_order(order.id)
+                ctx.buy(order.instrument, self.lots, tag=order.tag)
+                log.info("%s: %s stop-limit unfilled since %s, chasing at market", self._day, order.instrument.symbol,
+                         f"{order.triggered_at:%H:%M}")
 
     def _is_liquid(self, ctx: Context, inst: Instrument) -> bool:
         bars = ctx.data.history(inst, self.liq_lookback)
@@ -117,6 +140,8 @@ class VixIronFly(Strategy):
                 self.note = "session started after the entry window, no trade"
                 return
             self._enter(ctx)
+        elif self.state == "OPEN" and clock.time() < self.exit_time:
+            self._chase_stops(ctx, clock)
         elif self.state == "OPEN" and clock.time() >= self.exit_time:
             ctx.cancel_all()
             ctx.square_off_all(tag="exit-time")
@@ -126,8 +151,13 @@ class VixIronFly(Strategy):
     def on_fill(self, ctx: Context, fill: Fill) -> None:
         kind, _, side = fill.tag.partition(":")
         if kind == "short":
-            trigger = round(fill.price * (1 + self.day_sl_pct), 2)
-            ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}")
+            if self.stop_type == "market":
+                trigger = round(fill.price * (1 + self.day_sl_pct), 2)
+                ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}")
+            else:
+                trigger = _tick(fill.price * (1 + self.day_sl_pct))
+                ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}",
+                             limit=_tick(trigger * (1 + self.stop_buffer)))
         elif kind == "sl" and self.state == "OPEN":  # a 2nd SL in the same bar is already handled
             self.note += f"; {side} stop-loss hit at {fill.ts:%H:%M}"
             if self.on_stop_loss == "exit_all":

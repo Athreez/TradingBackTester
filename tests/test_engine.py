@@ -8,7 +8,7 @@ from backtester.historical_data import HistoricalMarketData
 from backtester.metrics import summarize
 from backtester.sim_broker import SimBroker
 from core.costs import CostModel
-from core.models import OptionType
+from core.models import Bar, Exchange, Instrument, OptionType, Order, OrderType, Side
 from core.strategy_base import Strategy
 from data.store import DataStore
 
@@ -91,3 +91,24 @@ def test_limit_order_waits_for_price(store):
     data.set_time(datetime(2025, 1, 1, 9, 16))  # bar at 140 -> fills at 140
     fills = broker.process(data.now())
     assert len(fills) == 1 and fills[0].price == 140
+
+
+@pytest.mark.parametrize("bars, fills", [
+    # (open, high, low) per bar; trigger 130, limit 136.5
+    ([(120, 125, 118), (128, 133, 127)], [(1, 130.0)]),            # crosses trigger -> fills at trigger
+    ([(120, 125, 118), (131, 134, 130)], [(1, 131.0)]),            # opens above trigger, inside limit
+    ([(120, 125, 118), (150, 160, 140), (145, 150, 135)], [(2, 136.5)]),  # gaps past limit, fills when back
+    ([(120, 125, 118), (150, 160, 140), (150, 155, 140)], []),     # gaps past limit, never comes back
+])
+def test_stop_limit_buy(bars, fills):
+    inst = Instrument("X", Exchange.NFO, "NIFTY")
+    quotes = iter(Bar(datetime(2025, 9, 8, 9, 15 + i), o, h, l, h) for i, (o, h, l) in enumerate(bars))
+    current = {}
+    broker = SimBroker(lambda i: current["bar"], CostModel(brokerage_per_order=0, stt_sell=0, exchange_txn={}, ipft={},
+                                                           sebi_fee=0, stamp_duty_buy=0, gst=0), 100_000)
+    broker.place_order(Order(inst, Side.BUY, 1, OrderType.STOP_LIMIT, limit_price=136.5, trigger_price=130))
+    got = []
+    for i, bar in enumerate(quotes):
+        current["bar"] = bar
+        got += [(i, f.price) for f in broker.process(bar.ts)]
+    assert got == fills

@@ -63,7 +63,7 @@ class SimBroker(Broker):
             bar = self._quote(order.instrument)
             if bar is None:
                 continue  # no trade in this instrument this bar; stay pending
-            price = self._match(order, bar)
+            price = self._match(order, bar, ts)
             if price is None:
                 continue
             del self._pending[order.id]
@@ -91,16 +91,28 @@ class SimBroker(Broker):
             value += pos.quantity * (price if price is not None else pos.avg_price)
         return value
 
-    def _match(self, order: Order, bar: Bar) -> float | None:
+    def _match(self, order: Order, bar: Bar, ts: datetime) -> float | None:
         if order.order_type is OrderType.MARKET:
             return self.costs.fill_price(order.side, bar.open)
-        if order.order_type is OrderType.STOP:
+        if order.order_type in (OrderType.STOP, OrderType.STOP_LIMIT) and order.triggered_at is None:
             trigger = order.trigger_price
-            if order.side is Side.BUY and bar.high >= trigger:
-                return self.costs.fill_price(Side.BUY, max(bar.open, trigger))
-            if order.side is Side.SELL and bar.low <= trigger:
-                return self.costs.fill_price(Side.SELL, min(bar.open, trigger))
-            return None
+            hit = bar.high >= trigger if order.side is Side.BUY else bar.low <= trigger
+            if not hit:
+                return None
+            if order.order_type is OrderType.STOP:
+                price = max(bar.open, trigger) if order.side is Side.BUY else min(bar.open, trigger)
+                return self.costs.fill_price(order.side, price)
+            order.triggered_at = ts
+            # Becomes a limit order: fills where the trigger was crossed if that is inside the limit;
+            # if price gapped past the limit it rests there (filled later only if price comes back).
+            start = max(bar.open, trigger) if order.side is Side.BUY else min(bar.open, trigger)
+            limit = order.limit_price
+            if order.side is Side.BUY:
+                return min(self.costs.fill_price(Side.BUY, start), limit) if start <= limit else None
+            return max(self.costs.fill_price(Side.SELL, start), limit) if start >= limit else None
+        return self._limit_fill(order, bar)
+
+    def _limit_fill(self, order: Order, bar: Bar) -> float | None:
         limit = order.limit_price
         if order.side is Side.BUY and bar.low <= limit:
             return min(bar.open, limit)

@@ -28,6 +28,7 @@ class OrderType(str, Enum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
     STOP = "STOP"  # stop-loss market (Zerodha SL-M): becomes market once trigger_price trades
+    STOP_LIMIT = "STOP_LIMIT"  # stop-loss limit (INDmoney GTT): becomes a limit order at limit_price once triggered
 
 
 class OrderStatus(str, Enum):
@@ -72,11 +73,12 @@ class Order:
     quantity: int  # units, not lots (lots * lot_size)
     order_type: OrderType = OrderType.MARKET
     limit_price: float | None = None
-    trigger_price: float | None = None  # for STOP orders
+    trigger_price: float | None = None  # for STOP / STOP_LIMIT orders
     tag: str = ""  # free text for the strategy, e.g. "fly1-short-ce"
     id: int = field(default_factory=lambda: next(_order_ids))
     status: OrderStatus = OrderStatus.PENDING
     created_at: datetime | None = None
+    triggered_at: datetime | None = None  # STOP_LIMIT: when the trigger traded (the limit may still be unfilled)
 
 
 @dataclass(frozen=True)

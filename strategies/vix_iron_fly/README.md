@@ -34,9 +34,12 @@ Expiry days are traded. Lot sizes come from `data/underlyings.py` by expiry date
 
 - **Entry 09:22:** ATM = strike nearest to spot. Buy CE at ATM + hedge and PE at
   ATM - hedge (hedges first), then sell ATM CE and ATM PE. Same lots on all legs.
-- **Stop-loss (per side):** each short leg has an SL-M at +30% / +40% (by VIX) of
-  its sell price. When it fires, that short and its hedge exit; the other side
-  keeps running.
+- **Stop-loss (per side):** each short leg has a stop at +30% / +40% (by VIX) of
+  its sell price, placed as an INDmoney GTT-style stop-limit: limit 5% above the
+  trigger, prices on the 0.05 tick. If price gaps past the limit and the stop is
+  still unfilled a minute after triggering, it is replaced by a market buy. When
+  it fills, that short and its hedge exit; the other side keeps running.
+  (`stop_order.type: market` switches back to SL-M.)
 - **Exit 14:45:** square off everything still open.
 - One trade per day, no re-entry.
 
@@ -47,6 +50,11 @@ Backtest, 2 Apr 2025 - 3 Nov 2026, 1 lot, Zerodha charges: net +1,03,209
 levels were chosen on the Sep 2025 onwards data, so only Apr - Aug 2025 is
 out-of-sample. INDmoney has no expired contracts before Apr 2025.
 
-Backtest notes: SL fires when a 1-minute candle's high touches the trigger and
-fills at the trigger (or the open, if it gapped through). Expiry weekdays moved
+GTT stop-limits vs SL-M over the same period: of 233 stops, 2 filled a minute
+later than SL-M would have; net -532 (+1,02,677 vs +1,03,209). A 2% buffer
+costs -2,948, a 10% buffer -1,103.
+
+Backtest notes: a stop triggers when a 1-minute candle's high touches the trigger
+and fills at the trigger (or the open, if it gapped through) when that is within
+the limit; otherwise it rests at the limit until the chase replaces it. Expiry weekdays moved
 in Sep 2025 (NIFTY Thu -> Tue, SENSEX Tue -> Thu).

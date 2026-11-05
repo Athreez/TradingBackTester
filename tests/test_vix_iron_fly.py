@@ -10,9 +10,9 @@ from strategies.vix_iron_fly.strategy import VixIronFly
 
 DAY = "2025-09-08"  # Monday -> NIFTY
 EXPIRY = date(2025, 9, 9)
-# Fixed 50% SL, +/-400 hedges, no VIX gating or hedge liquidity check, so these tests don't depend on config.yaml defaults.
+# Fixed 50% SL-M, +/-400 hedges, no VIX gating or hedge liquidity check, so these tests don't depend on config.yaml defaults.
 BASE = {"vix_regimes": [], "stop_loss_pct": 50, "skip_expiry_day": False, "vix_min": None, "vix_max": None,
-        "hedge_liquidity": {"min_lots": 0},
+        "hedge_liquidity": {"min_lots": 0}, "stop_order": {"type": "market"},
         "schedule": {"NIFTY": {"hedge_distance": 400, "lots": 1}, "SENSEX": {"hedge_distance": 1300, "lots": 1}}}
 SYMS = {
     ("CE", 24000): "NIFTY25SEP0924000CE", ("PE", 24000): "NIFTY25SEP0924000PE",
@@ -188,3 +188,18 @@ def test_illiquid_hedge_falls_back_to_round_strike(store, ce_400_volume, ce_500_
     assert hedges == ([expected_hedge_ce] if expected_hedge_ce else [])
     if expected_hedge_ce is None:
         assert result.fills == []
+
+
+def test_gtt_stop_limit_chases_at_market_when_price_gaps_past_limit(store):
+    def short_ce(ts):  # 100 until 10:30, then gaps to 200 and stays there (past the 50% SL's limit)
+        return (100,) * 4 if ts < pd.Timestamp(f"{DAY} 10:30") else (200,) * 4
+    store.save_candles("1minute", "NFO", SYMS[("CE", 24000)], _day(short_ce))
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "on_stop_loss": "exit_side",
+                                     "stop_order": {"type": "limit", "limit_buffer_pct": 5, "chase_after_minutes": 1}})
+    fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
+    at = lambda hm: datetime.fromisoformat(f"{DAY} {hm}")
+    sl = fills[("sl:CE", "NIFTY25SEP0924000CE")]
+    assert sl.ts == at("10:31") and sl.price == pytest.approx(200 * 1.0005)  # market buy, a bar after triggering
+    assert fills[("hedge-exit:CE", "NIFTY25SEP0924400CE")].ts == at("10:32")
+    assert len(result.fills) == 8 and result.broker.positions() == {}

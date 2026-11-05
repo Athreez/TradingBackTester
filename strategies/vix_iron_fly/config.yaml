@@ -16,6 +16,12 @@ params:
   exit_time: "14:45"
   entry_window_minutes: 5    # skip the day if no candle within 5 min of entry_time (special sessions)
   on_stop_loss: exit_side    # a stopped short exits with its own hedge; the other side keeps running
+  # Stop-losses as INDmoney GTT stop-limits: limit 5% above the trigger; a triggered stop still
+  # unfilled after 1 minute (price ran past the limit) is replaced by a market buy. type: market = SL-M.
+  stop_order:
+    type: limit
+    limit_buffer_pct: 5
+    chase_after_minutes: 1
   skip_expiry_day: false     # expiry days are traded
   # India VIX at entry picks the day's stop-loss; VIX in 11..14 -> no trade.
   vix_regimes:

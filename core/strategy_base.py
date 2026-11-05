@@ -26,9 +26,11 @@ class Context:
     def sell(self, instrument: Instrument, lots: int, limit: float | None = None, tag: str = "") -> Order:
         return self._order(instrument, Side.SELL, lots, limit, tag)
 
-    def stop_buy(self, instrument: Instrument, lots: int, trigger: float, tag: str = "") -> Order:
-        """Stop-loss market buy (e.g. SL for a short option): fires once price trades >= trigger."""
-        return self._order(instrument, Side.BUY, lots, None, tag, trigger)
+    def stop_buy(self, instrument: Instrument, lots: int, trigger: float, tag: str = "",
+                 limit: float | None = None) -> Order:
+        """Stop-loss buy (e.g. SL for a short option): fires once price trades >= trigger, then fills at
+        market, or with `limit` as a limit order at that price (stop-limit, like an INDmoney GTT)."""
+        return self._order(instrument, Side.BUY, lots, limit, tag, trigger)
 
     def stop_sell(self, instrument: Instrument, lots: int, trigger: float, tag: str = "") -> Order:
         return self._order(instrument, Side.SELL, lots, None, tag, trigger)
@@ -46,7 +48,7 @@ class Context:
 
     def _order(self, instrument, side, lots, limit, tag, trigger=None) -> Order:
         if trigger is not None:
-            order_type = OrderType.STOP
+            order_type = OrderType.STOP if limit is None else OrderType.STOP_LIMIT
         elif limit is not None:
             order_type = OrderType.LIMIT
         else:
