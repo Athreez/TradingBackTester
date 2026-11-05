@@ -141,7 +141,11 @@ class PaperBot:
         self.broker = SimBroker.__new__(SimBroker)
         self.broker.__dict__.update(state["broker"])
         if state["day"] == ist_now().date():
-            self.strategy = state["strategy"]  # mid-day restart: keep today's legs / SL state
+            # Mid-day restart: keep today's legs / SL state. Attributes added to the strategy since the
+            # state was saved come from the freshly loaded instance.
+            fresh, self.strategy = self.strategy, state["strategy"]
+            for k, v in fresh.__dict__.items():
+                self.strategy.__dict__.setdefault(k, v)
         self.last_bar, self.day, self.day_closed = state["last_bar"], state["day"], state["day_closed"]
         # Keep order ids unique across restarts.
         models._order_ids = itertools.count(max((o.id for o in self.broker.orders()), default=0) + 1)
@@ -174,6 +178,8 @@ class PaperBot:
     def _run_day(self, today: date) -> None:
         if self.day != today:
             self.day, self.day_closed = today, False
+            # A new day starts from a fresh strategy, not one restored from an earlier day's state.
+            self.strategy, self.config = load_strategy(self.strategy_name)
         self._setup_logfile(today)
         log.info("=== %s: preparing session", today)
 
