@@ -7,7 +7,7 @@ capital: 500000
 exclude_dates:
   - 2025-10-21  # Diwali Muhurat trading (13:45-14:45)
 
-# Overrides for core/costs.py CostModel. Defaults = Zerodha F&O options charges.
+# Overrides for core/costs.py CostModel. Defaults = INDmoney API option charges (preset: zerodha for Zerodha).
 costs:
   slippage: 0.0005
 

@@ -1,4 +1,4 @@
-"""Order execution interface: SimBroker (backtest + paper) and the Zerodha broker implement this."""
+"""Order execution interface: SimBroker (backtest + paper) and the INDmoney live broker implement this."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

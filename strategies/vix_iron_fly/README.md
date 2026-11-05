@@ -50,6 +50,12 @@ Backtest, 2 Apr 2025 - 3 Nov 2026, 1 lot, Zerodha charges: net +1,03,209
 levels were chosen on the Sep 2025 onwards data, so only Apr - Aug 2025 is
 out-of-sample. INDmoney has no expired contracts before Apr 2025.
 
+Charges: orders will go through the INDmoney API, so backtests now default to
+INDmoney's API charges (Rs 10 brokerage vs Zerodha's Rs 20; see core/costs.py).
+Sep 2025 - 5 Nov 2026, GTT stops, 1 lot: net +72,284 with INDmoney charges
+(charges 20,037) vs +57,509 with Zerodha's (charges 34,812); max drawdown
+-21,518. The Apr 2025 figures above use Zerodha charges.
+
 GTT stop-limits vs SL-M over the same period: of 233 stops, 2 filled a minute
 later than SL-M would have; net -532 (+1,02,677 vs +1,03,209). A 2% buffer
 costs -2,948, a 10% buffer -1,103.

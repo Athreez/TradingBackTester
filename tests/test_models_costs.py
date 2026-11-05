@@ -24,9 +24,27 @@ def test_position_flip():
     assert p.quantity == -75 and p.avg_price == 120.0 and p.realized_pnl == pytest.approx(75 * 20)
 
 
+@pytest.mark.parametrize("exchange, side, qty, price, api_total", [
+    # total_charges from INDmoney's own /margin endpoint (2026-11-06) for API option orders
+    (Exchange.NFO, Side.SELL, 65, 100, 24.25), (Exchange.NFO, Side.BUY, 65, 100, 14.69),
+    (Exchange.BFO, Side.SELL, 20, 100, 15.63), (Exchange.BFO, Side.BUY, 20, 100, 12.69),
+    (Exchange.NFO, Side.SELL, 650, 1000, 1259.49), (Exchange.NFO, Side.BUY, 650, 1000, 303.99),
+    (Exchange.BFO, Side.SELL, 200, 1000, 395.70), (Exchange.BFO, Side.BUY, 200, 1000, 101.70),
+])
+def test_default_costs_match_indmoney_api(exchange, side, qty, price, api_total):
+    assert CostModel().charges(exchange, side, qty, price) == pytest.approx(api_total, abs=0.05)
+
+
+def test_cost_presets_from_config():
+    assert CostModel.from_dict(None).brokerage_per_order == 10
+    assert CostModel.from_dict({"preset": "zerodha", "slippage": 0.001}).brokerage_per_order == 20
+    with pytest.raises(ValueError):
+        CostModel.from_dict({"preset": "upstox"})
+
+
 def test_zerodha_nifty_round_trip():
     # 1 lot (75) NIFTY option: sell @ 100, buy back @ 80.
-    c = CostModel()
+    c = CostModel.zerodha()
     sell = c.charges(Exchange.NFO, Side.SELL, 75, 100.0)  # turnover 7500
     buy = c.charges(Exchange.NFO, Side.BUY, 75, 80.0)  # turnover 6000
     exp_sell = 20 + 7500 * (0.0003553 + 1e-9 + 1e-6) + 7500 * 0.0015 \
@@ -38,10 +56,10 @@ def test_zerodha_nifty_round_trip():
 
 
 def test_settlement_charges():
-    c = CostModel()
+    c = CostModel()  # Rs 10 brokerage + 18% GST
     assert c.settlement_charges(was_long=True, quantity=75, intrinsic=0) == 0
-    assert c.settlement_charges(was_long=True, quantity=75, intrinsic=50) == pytest.approx(23.6 + 3750 * 0.0015)
-    assert c.settlement_charges(was_long=False, quantity=75, intrinsic=50) == pytest.approx(23.6)
+    assert c.settlement_charges(was_long=True, quantity=75, intrinsic=50) == pytest.approx(11.8 + 3750 * 0.0015)
+    assert c.settlement_charges(was_long=False, quantity=75, intrinsic=50) == pytest.approx(11.8)
 
 
 def test_costs_sell_has_stt_buy_has_stamp():

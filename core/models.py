@@ -27,7 +27,7 @@ class Side(str, Enum):
 class OrderType(str, Enum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
-    STOP = "STOP"  # stop-loss market (Zerodha SL-M): becomes market once trigger_price trades
+    STOP = "STOP"  # stop-loss market (SL-M): becomes market once trigger_price trades
     STOP_LIMIT = "STOP_LIMIT"  # stop-loss limit (INDmoney GTT): becomes a limit order at limit_price once triggered
 
 
