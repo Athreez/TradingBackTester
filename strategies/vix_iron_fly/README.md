@@ -43,16 +43,17 @@ Expiry days are traded. Lot sizes come from `data/underlyings.py` by expiry date
 - **Exit 14:45:** square off everything still open.
 - One trade per day, no re-entry.
 
-Backtest, 2 Apr 2025 - 3 Nov 2026, 1 lot, Zerodha charges: net +1,03,209
-(+20.6%), max drawdown -23,306, 208 days traded, 65% winners (Apr - Aug 2025:
-53 days, +47,446; Sep 2025 onwards: 155 days, +55,763). Fixed +/-400 NIFTY,
-+/-1300 SENSEX hedges: net +95,263. VIX thresholds and stop
+Backtest, 2 Apr 2025 - 3 Nov 2026, 1 lot, GTT stop-limits, INDmoney charges:
+net +1,22,312 (+24.5%), max drawdown -21,512, 208 days traded, 66% winners
+(Apr - Aug 2025: 53 days, +51,986; Sep 2025 onwards: 155 days, +70,326).
+Charges 26,739 over 1,664 orders; at Zerodha's Rs 20 brokerage the net would be
+19,635 lower. VIX thresholds and stop
 levels were chosen on the Sep 2025 onwards data, so only Apr - Aug 2025 is
 out-of-sample. INDmoney has no expired contracts before Apr 2025.
 
 GTT stop-limits vs SL-M over the same period: of 233 stops, 2 filled a minute
-later than SL-M would have; net -532 (+1,02,677 vs +1,03,209). A 2% buffer
-costs -2,948, a 10% buffer -1,103.
+later than SL-M would have; net -532. A 2% buffer costs -2,948, a 10% buffer
+-1,103.
 
 Backtest notes: a stop triggers when a 1-minute candle's high touches the trigger
 and fills at the trigger (or the open, if it gapped through) when that is within

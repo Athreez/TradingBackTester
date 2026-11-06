@@ -1,7 +1,7 @@
 # TradingBackTester
 
 Backtest NIFTY / SENSEX weekly options strategies, then run the same strategy
-code in a paper trading bot and later a real Zerodha bot.
+code in a paper trading bot and later a real bot placing orders through INDmoney.
 
 ```
 core/           shared models, Strategy / Broker / MarketData interfaces, cost model
@@ -9,7 +9,7 @@ data/           INDmoney API client, downloader CLI, Parquet cache (data/cache, 
 strategies/     one folder per strategy: strategy.py + config.yaml + README.md
 backtester/     event-driven engine, simulated broker, metrics, CLI
 paper_trader/   live INDmoney data + simulated broker          (phase 2)
-live_trader/    live data + Zerodha Kite orders                (phase 3)
+live_trader/    live data + INDmoney orders                    (phase 3)
 reports/        backtest outputs (git-ignored)
 ```
 
@@ -17,7 +17,7 @@ reports/        backtest outputs (git-ignored)
 |---------------|----------------------|----------------|
 | backtester    | cached history       | SimBroker      |
 | paper_trader  | INDmoney live        | SimBroker      |
-| live_trader   | live                 | Zerodha Kite   |
+| live_trader   | INDmoney live        | INDmoney       |
 
 ## Setup
 

@@ -24,24 +24,24 @@ def test_position_flip():
     assert p.quantity == -75 and p.avg_price == 120.0 and p.realized_pnl == pytest.approx(75 * 20)
 
 
-def test_zerodha_nifty_round_trip():
+def test_indmoney_nifty_round_trip():
     # 1 lot (75) NIFTY option: sell @ 100, buy back @ 80.
     c = CostModel()
     sell = c.charges(Exchange.NFO, Side.SELL, 75, 100.0)  # turnover 7500
     buy = c.charges(Exchange.NFO, Side.BUY, 75, 80.0)  # turnover 6000
-    exp_sell = 20 + 7500 * (0.0003553 + 1e-9 + 1e-6) + 7500 * 0.0015 \
-        + (20 + 7500 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
-    exp_buy = 20 + 6000 * (0.0003553 + 1e-9 + 1e-6) + 6000 * 0.00003 \
-        + (20 + 6000 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
+    exp_sell = 10 + 7500 * (0.0003553 + 1e-9 + 1e-6) + 7500 * 0.0015 \
+        + (10 + 7500 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
+    exp_buy = 10 + 6000 * (0.0003553 + 1e-9 + 1e-6) + 6000 * 0.00003 \
+        + (10 + 6000 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
     assert sell == pytest.approx(exp_sell) and buy == pytest.approx(exp_buy)
-    assert sell + buy == pytest.approx(64.31, abs=0.01)
+    assert sell + buy == pytest.approx(40.71, abs=0.01)
 
 
 def test_settlement_charges():
     c = CostModel()
     assert c.settlement_charges(was_long=True, quantity=75, intrinsic=0) == 0
-    assert c.settlement_charges(was_long=True, quantity=75, intrinsic=50) == pytest.approx(23.6 + 3750 * 0.0015)
-    assert c.settlement_charges(was_long=False, quantity=75, intrinsic=50) == pytest.approx(23.6)
+    assert c.settlement_charges(was_long=True, quantity=75, intrinsic=50) == pytest.approx(11.8 + 3750 * 0.0015)
+    assert c.settlement_charges(was_long=False, quantity=75, intrinsic=50) == pytest.approx(11.8)
 
 
 def test_costs_sell_has_stt_buy_has_stamp():

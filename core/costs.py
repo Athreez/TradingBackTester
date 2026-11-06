@@ -1,8 +1,9 @@
 """Transaction cost model for Indian index options.
 
-Defaults are Zerodha's F&O options charges (zerodha.com/charges, checked
-2026-11-02). Rates change with budgets / exchange circulars -- re-check
-periodically. All rates are fractions of premium turnover unless noted.
+Defaults are INDmoney's F&O options charges: Rs 10 brokerage per order, with
+the exchange and regulatory charges matching INDmoney's own margin API leg by
+leg (checked 2026-11-04). Rates change with budgets / exchange circulars --
+re-check periodically. All rates are fractions of premium turnover unless noted.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from core.models import Exchange, Side
 
 @dataclass(frozen=True)
 class CostModel:
-    brokerage_per_order: float = 20.0  # flat Rs per executed order
+    brokerage_per_order: float = 10.0  # flat Rs per executed order (Zerodha: 20)
     stt_sell: float = 0.0015  # STT on sell-side premium
     stt_exercise: float = 0.0015  # STT on intrinsic value of long options exercised at expiry
     exchange_txn: dict[Exchange, float] = field(
@@ -23,7 +24,7 @@ class CostModel:
     sebi_fee: float = 10 / 1e7  # Rs 10 per crore
     stamp_duty_buy: float = 0.00003  # 0.003% on buy side
     gst: float = 0.18  # on brokerage + exchange txn + SEBI fee + IPFT
-    brokerage_on_exercise: bool = True  # Zerodha charges brokerage on exercised contracts
+    brokerage_on_exercise: bool = True  # brokerage on contracts settled in the money at expiry
     slippage: float = 0.0  # adverse fraction of price applied to every market fill
 
     def txn_rate(self, exchange: Exchange) -> float:

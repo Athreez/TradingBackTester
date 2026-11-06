@@ -328,7 +328,8 @@ def dashboard() -> None:
     else:
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("Net after charges", inr(daily["net"].sum(), signed=True))
-        s2.metric("Charges paid", inr(daily["charges"].sum()))
+        s2.metric("Charges paid", inr(daily["charges"].sum()),
+                  help="INDmoney charges: Rs 10 brokerage per order, plus STT, exchange, SEBI, stamp duty and GST")
         s3.metric("Win rate (traded days)", f"{(traded['net'] > 0).mean():.0%}" if len(traded) else "–")
         s4.metric("Worst day", inr(daily["net"].min(), signed=True))
         h_left, h_right = st.columns(2)
