@@ -1,7 +1,7 @@
 # TradingBackTester
 
 Backtest NIFTY / SENSEX weekly options strategies, then run the same strategy
-code in a paper trading bot and later a real bot, all on the INDmoney (INDstocks) API.
+code in a paper trading bot and later a real bot placing orders through INDmoney.
 
 ```
 core/           shared models, Strategy / Broker / MarketData interfaces, cost model
@@ -17,7 +17,7 @@ reports/        backtest outputs (git-ignored)
 |---------------|----------------------|----------------|
 | backtester    | cached history       | SimBroker      |
 | paper_trader  | INDmoney live        | SimBroker      |
-| live_trader   | live                 | INDmoney       |
+| live_trader   | INDmoney live        | INDmoney       |
 
 ## Setup
 

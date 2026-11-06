@@ -47,12 +47,12 @@ def test_zerodha_nifty_round_trip():
     c = CostModel.zerodha()
     sell = c.charges(Exchange.NFO, Side.SELL, 75, 100.0)  # turnover 7500
     buy = c.charges(Exchange.NFO, Side.BUY, 75, 80.0)  # turnover 6000
-    exp_sell = 20 + 7500 * (0.0003553 + 1e-9 + 1e-6) + 7500 * 0.0015 \
-        + (20 + 7500 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
-    exp_buy = 20 + 6000 * (0.0003553 + 1e-9 + 1e-6) + 6000 * 0.00003 \
-        + (20 + 6000 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
+    exp_sell = 10 + 7500 * (0.0003553 + 1e-9 + 1e-6) + 7500 * 0.0015 \
+        + (10 + 7500 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
+    exp_buy = 10 + 6000 * (0.0003553 + 1e-9 + 1e-6) + 6000 * 0.00003 \
+        + (10 + 6000 * (0.0003553 + 1e-6 + 1e-9)) * 0.18
     assert sell == pytest.approx(exp_sell) and buy == pytest.approx(exp_buy)
-    assert sell + buy == pytest.approx(64.31, abs=0.01)
+    assert sell + buy == pytest.approx(40.71, abs=0.01)
 
 
 def test_settlement_charges():

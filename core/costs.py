@@ -18,7 +18,7 @@ from core.models import Exchange, Side
 
 @dataclass(frozen=True)
 class CostModel:
-    brokerage_per_order: float = 10.0  # flat Rs per executed order
+    brokerage_per_order: float = 10.0  # flat Rs per executed order (Zerodha: 20)
     stt_sell: float = 0.0015  # STT on sell-side premium
     stt_exercise: float = 0.0015  # STT on intrinsic value of long options exercised at expiry
     exchange_txn: dict[Exchange, float] = field(
