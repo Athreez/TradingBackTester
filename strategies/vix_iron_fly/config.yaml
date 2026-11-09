@@ -6,6 +6,7 @@ capital: 500000
 # Special sessions left out of backtests entirely (data stays in the cache).
 exclude_dates:
   - 2025-10-21  # Diwali Muhurat trading (13:45-14:45)
+  - 2026-11-08  # Diwali Muhurat trading (Sunday, 14:20-15:30)
 
 # Overrides for core/costs.py CostModel. Defaults = INDmoney API option charges (preset: zerodha for Zerodha).
 costs:

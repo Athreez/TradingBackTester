@@ -61,7 +61,8 @@ def download_index(client, store, underlying: str, start: date, end: date, inter
 
 
 def download_options(client, store, underlying: str, start: date, end: date, interval: str,
-                     days_before: int, strike_buffer: float) -> None:
+                     days_before: int, strike_buffer: float) -> list[date]:
+    """Expired contracts in [start, end]; returns their expiries."""
     u = get_underlying(underlying)
     download_index(client, store, underlying, start - timedelta(days=days_before), end, interval)
     index_df = store.load_candles(interval, u.index_exchange.value, underlying)
@@ -96,6 +97,7 @@ def download_options(client, store, underlying: str, start: date, end: date, int
             store.save_candles(interval, u.option_exchange.value, sym, df)
         log.info("%s %s: saved %d/%d option series (strikes %.0f-%.0f)",
                  underlying, expiry, len(frames), len(symbols), lo, hi)
+    return expiries
 
 
 def _covers(store, interval: str, exchange: str, symbol: str, last_day: date) -> bool:
@@ -129,7 +131,7 @@ def _historical_skipping_invalid(client, codes: list[str], interval: str, start:
 
 
 def download_live_options(client, store, underlying: str, start: date, end: date, interval: str,
-                          days_before: int, strike_buffer: float) -> None:
+                          days_before: int, strike_buffer: float, already_expired: set[date] = frozenset()) -> None:
     """Contracts that have NOT expired yet (e.g. this week's) are not in the expired endpoints; take them
     from the live instrument master and fetch their candles by scrip code, saved under the same
     symbols the expired data uses, so a later expired download merges into them."""
@@ -140,8 +142,10 @@ def download_live_options(client, store, underlying: str, start: date, end: date
                   & master["OPTION_TYPE"].isin(["CE", "PE"])].copy()
     rows["expiry"] = pd.to_datetime(rows["EXPIRY_DATE"], format="%m/%d/%Y %H:%M").dt.date
     # Only contracts still live today: anything earlier is (or will be) in the expired endpoints.
+    # A contract expiring today is still listed live but is already served by the expired endpoints.
     expiries = sorted(e for e in rows["expiry"].unique()
-                      if e >= max(start, date.today()) and e - timedelta(days=days_before) <= end)
+                      if e >= max(start, date.today()) and e - timedelta(days=days_before) <= end
+                      and e not in already_expired)
     for expiry in expiries:
         w_start = datetime.combine(expiry - timedelta(days=days_before), time.min)
         w_end = datetime.combine(min(expiry, end) + timedelta(days=1), time.min)
@@ -282,10 +286,10 @@ def main() -> None:
     elif args.cmd == "index":
         download_index(client, store, args.underlying, args.start, args.end, args.interval)
     else:
-        download_options(client, store, args.underlying, args.start, args.end, args.interval,
-                         args.days_before, args.strike_buffer)
+        expired = download_options(client, store, args.underlying, args.start, args.end, args.interval,
+                                   args.days_before, args.strike_buffer)
         download_live_options(client, store, args.underlying, args.start, args.end, args.interval,
-                              args.days_before, args.strike_buffer)
+                              args.days_before, args.strike_buffer, already_expired=set(expired))
 
 
 if __name__ == "__main__":
