@@ -81,7 +81,7 @@ class SimBroker(Broker):
         order = Order(instrument, side, abs(pos.quantity), tag="expiry-settlement",
                       status=OrderStatus.FILLED, created_at=ts)
         self._orders.append(order)
-        charges = self.costs.settlement_charges(was_long, order.quantity, price)
+        charges = self.costs.settlement_charges(was_long, order.quantity, price, ts.date())
         return self._record_fill(order, price, ts, charges=charges)
 
     def equity(self, mark: Callable[[Instrument], float | None]) -> float:
@@ -123,7 +123,7 @@ class SimBroker(Broker):
     def _record_fill(self, order: Order, price: float, ts: datetime, charges: float | None = None) -> Fill:
         inst = order.instrument
         if charges is None:
-            charges = self.costs.charges(inst.exchange, order.side, order.quantity, price)
+            charges = self.costs.charges(inst.exchange, order.side, order.quantity, price, ts.date())
         fill = Fill(order.id, inst, order.side, order.quantity, price, ts, charges, order.tag)
         signed_value = order.quantity * price
         self.cash += -signed_value if order.side is Side.BUY else signed_value

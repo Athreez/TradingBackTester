@@ -29,12 +29,16 @@ class Underlying:
 
 
 UNDERLYINGS: dict[str, Underlying] = {
-    # NSE circular FAOP70616: weekly 75 until the 23-Dec-2025 expiry, 65 from 06-Jan-2026.
+    # 50 from the Jul-2021 series (earlier weeklies were 75 and are not modelled); 25 for contracts
+    # trading from 26-Apr-2024; 75 for contracts listed from 20-Nov-2024, i.e. weekly 25 through the
+    # 26-Dec-2024 expiry and 75 from 02-Jan-2025; NSE circular FAOP70616: 65 from 06-Jan-2026.
     "NIFTY": Underlying("NIFTY", "NIFTY 50", Exchange.NSE, Exchange.NFO, 50,
-                        ((date(2024, 11, 20), 75), (date(2025, 12, 24), 65))),
-    # 20 for every expiry through Dec 2026 (INDstocks instrument master); 25 from the Jan-2027 contract.
+                        ((date(2021, 8, 1), 50), (date(2024, 4, 26), 25), (date(2024, 12, 27), 75),
+                         (date(2025, 12, 24), 65))),
+    # 10 since the May-2023 weekly relaunch; 20 for contracts listed from 20-Nov-2024 (weekly 10 through
+    # the 03-Jan-2025 expiry, 20 from 07-Jan-2025); 25 from the Jan-2027 contract.
     "SENSEX": Underlying("SENSEX", "SENSEX", Exchange.BSE, Exchange.BFO, 100,
-                         ((date(2024, 12, 1), 20), (date(2027, 1, 1), 25))),
+                         ((date(2023, 5, 1), 10), (date(2025, 1, 4), 20), (date(2027, 1, 1), 25))),
 }
 
 
