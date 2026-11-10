@@ -126,6 +126,9 @@ class PaperBot:
         self.day_closed = False
         self._restore()
         self._fills_logged = len(self.broker.fills())
+        from paper_trader.notify import Telegram, TradeNotifier
+        tg = Telegram.from_env()  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env, else off
+        self.notifier = TradeNotifier(tg) if tg else None
 
     # ---- state ----------------------------------------------------------
 
@@ -230,9 +233,10 @@ class PaperBot:
             for ts in feed.index_bars(after, completed):
                 run_bar(self.strategy, ctx, self.broker, data, ts)
                 self.last_bar = ts
-                self._log_new_fills()
-                if mirror:  # only the latest bar is live; older ones are catch-up after a late start
-                    mirror.sync(self.broker, ts, live=completed - ts < 2 * BAR)
+                live = completed - ts < 2 * BAR  # older bars are catch-up after a late start
+                self._log_new_fills(catch_up=not live)
+                if mirror:
+                    mirror.sync(self.broker, ts, live=live)
                 _append_csv(LOG_DIR / "equity.csv", {"ts": ts, "equity": round(self.broker.equity(data.ltp), 2)})
                 self._save()
             if mirror:
@@ -240,22 +244,28 @@ class PaperBot:
             self._write_snapshot(data, "trading session")
             _pause(POLL_SECONDS)
 
-        close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, LOG_DIR)
+        row = close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, LOG_DIR)
         if mirror:
             mirror.sync(self.broker, self.last_bar, live=False)
             mirror.close_day()
         self._log_new_fills()
+        if self.notifier and (self.last_bar and self.last_bar.date() == today):  # not on market holidays
+            try:
+                self.notifier.day_summary(today, row, self.strategy, self.broker.initial_capital,
+                                          mirror.summary() if mirror else "")
+            except Exception as e:
+                log.warning("telegram day summary failed: %s", e)
         self.day_closed = True
         self._save()
         self._write_snapshot(data, "session closed")
 
     def _make_mirror(self, feed: LiveFeed, today: date):
-        """LIVE_ORDERS=mirror in paper_trader/.env: also send every order to INDmoney (see live_trader/mirror.py)."""
+        """LIVE_ORDERS=mirror in .env: also send every order to INDmoney (see live_trader/mirror.py)."""
         if env("LIVE_ORDERS", "off") != "mirror":
             return None
         from live_trader.mirror import OrderMirror
         mirror = OrderMirror(self.client, feed._symbol_to_code, today, HERE.parent / "live_trader",
-                             max_balance=float(env("LIVE_MAX_BALANCE", "100")))
+                             max_balance=float(env("LIVE_MAX_BALANCE", "100")), notifier=self.notifier)
         mirror.start(self.broker)
         log.info("Live order mirroring ON%s", f" but halted: {mirror.halted}" if mirror.halted else "")
         return mirror
@@ -264,9 +274,15 @@ class PaperBot:
         write_snapshot(SNAPSHOT_PATH, phase=phase, strategy_name=self.strategy_name, broker=self.broker,
                        strategy=self.strategy, data=data, day=self.day, last_bar=self.last_bar)
 
-    def _log_new_fills(self) -> None:
-        log_fills(self.broker.fills()[self._fills_logged:], LOG_DIR)
+    def _log_new_fills(self, catch_up: bool = False) -> None:
+        new = self.broker.fills()[self._fills_logged:]
+        log_fills(new, LOG_DIR)
         self._fills_logged = len(self.broker.fills())
+        if self.notifier and new:
+            try:
+                self.notifier.fills(new, self.broker.fills(), self.strategy, catch_up=catch_up)
+            except Exception as e:  # notifications must never break the bot
+                log.warning("telegram notification failed: %s", e)
 
     def _setup_logfile(self, today: date) -> None:
         setup_day_logfile(LOG_DIR, today)
@@ -382,11 +398,11 @@ def main() -> None:
     p.add_argument("--once", action="store_true", help="exit after today's session")
     args = p.parse_args()
 
-    load_env(HERE / ".env")
+    load_env()
     logging.basicConfig(level=env("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     name = env("STRATEGY")
     if not name:
-        raise SystemExit("Set STRATEGY in paper_trader/.env (see paper_trader/.env.example)")
+        raise SystemExit("Set STRATEGY in .env (see .env.example)")
     capital = float(env("CAPITAL")) if env("CAPITAL") else None
     lock = _single_instance_lock()  # noqa: F841 (held until exit)
     PaperBot(name, capital).run(once=args.once)

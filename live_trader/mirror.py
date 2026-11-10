@@ -99,8 +99,9 @@ class Mirrored:
 
 class OrderMirror:
     def __init__(self, client: IndMoneyClient, symbol_to_code: dict[str, str], day: date, out_dir: Path,
-                 max_balance: float = 100.0, max_orders: int = 40):
+                 max_balance: float = 100.0, max_orders: int = 40, notifier=None):
         self.client = client
+        self.notifier = notifier  # paper_trader.notify.TradeNotifier, or None
         self.codes = symbol_to_code  # our symbol -> INDmoney scrip code, e.g. NFO_51011
         self.day = day
         self.log_dir = out_dir / "logs"
@@ -193,6 +194,7 @@ class OrderMirror:
             self.halted = (f"INDmoney reports Rs {balance:,.2f} available (limit {self.max_balance:,.0f}); "
                            "orders could really fill, so nothing is sent today")
             log.error(self.halted)
+            self._notify("alert", self.halted)
             return False
         return True
 
@@ -205,6 +207,7 @@ class OrderMirror:
         if len(self.orders) >= self.max_orders:
             self.halted = f"daily cap of {self.max_orders} mirrored orders reached"
             log.error(self.halted)
+            self._notify("alert", self.halted)
             return
         if not self._funds_ok():
             return
@@ -282,6 +285,7 @@ class OrderMirror:
         qty = int(_num(row.get("traded_qty")) or 0)
         self.halted = f"order {row.get('id')} ({m.tag}) FILLED {qty} on INDmoney -- mirroring stopped"
         log.critical(self.halted)
+        self._notify("alert", self.halted + ". Check the INDmoney app now.")
         for other in self.orders.values():
             if other is not m and not other.closed:
                 self._cancel(other, reason="unexpected fill")
@@ -295,11 +299,39 @@ class OrderMirror:
                 log.critical("LIVE flattening: %s", self.client.place_order(body))
             except Exception as e:
                 log.critical("LIVE flattening order FAILED, close %s %d by hand: %s", m.symbol, qty, e)
+                self._notify("alert", f"Flattening order FAILED: close {m.symbol} × {qty} by hand in the INDmoney app")
 
     # ---- records ---------------------------------------------------------
 
+    def _notify(self, method: str, *args) -> None:
+        if self.notifier:
+            try:
+                getattr(self.notifier, method)(*args)
+            except Exception as e:
+                log.warning("telegram notification failed: %s", e)
+
+    def summary(self) -> str:
+        """One line for the day-end message: orders sent, how INDmoney answered, paper fill vs live book."""
+        if not self.orders:
+            return f"INDmoney: no orders sent{f' ({self.halted})' if self.halted else ''}"
+        counts: dict[str, int] = {}
+        for m in self.orders.values():
+            last = list(m.statuses.values())[-1] if m.statuses else "no response"
+            counts[last] = counts.get(last, 0) + 1
+        text = "INDmoney: " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+        path = self.log_dir / "compare.csv"
+        if path.exists():
+            rows = [r for r in csv.DictReader(path.open()) if r["ts"].startswith(str(self.day))]
+            if rows:
+                worse = sum(float(r["worse_by_rupees"]) for r in rows)
+                text += f"\nLive book vs paper fills: {'+' if worse < 0 else '-'}Rs {abs(worse):,.0f} over {len(rows)} fills"
+        if self.halted:
+            text += f"\nStopped: {self.halted}"
+        return text
+
     def _event(self, m: Mirrored, broker_id: str, row: dict) -> None:
         log.info("LIVE %s %s (%s): %s %s", broker_id, m.symbol, m.tag, row.get("status"), row.get("extra_info") or "")
+        self._notify("live_event", m.tag, m.symbol, row.get("status") or "", row.get("extra_info") or "")
         self._csv("events.csv", {
             "seen_at": datetime.now().isoformat(timespec="seconds"), "sim_id": m.sim_id, "tag": m.tag,
             "symbol": m.symbol, "broker_id": broker_id, "status": row.get("status"),
