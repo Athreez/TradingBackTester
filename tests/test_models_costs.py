@@ -68,6 +68,18 @@ def test_costs_sell_has_stt_buy_has_stamp():
     assert c.charges(Exchange.NFO, Side.BUY, 100, 100.0) == pytest.approx(10_000 * c.stamp_duty_buy)
 
 
+def test_rates_follow_the_trade_date():
+    from datetime import date
+    c = CostModel()
+    stt = lambda day: c.charges(Exchange.NFO, Side.SELL, 100, 100.0, day) - c.charges(Exchange.NFO, Side.BUY, 100, 100.0, day)
+    assert c.on(date(2026, 4, 1)).stt_sell == c.on(None).stt_sell == 0.0015
+    assert c.on(date(2026, 3, 31)).stt_sell == 0.001
+    assert c.on(date(2024, 9, 30)).stt_sell == 0.000625 and c.on(date(2024, 9, 30)).txn_rate(Exchange.NFO) == 0.000495
+    assert c.on(date(2022, 1, 3)).txn_rate(Exchange.NFO) == 0.00053
+    assert stt(date(2022, 1, 3)) == pytest.approx(10_000 * (0.0005 - 0.00003))
+    assert CostModel.from_dict({"history": []}).on(date(2022, 1, 3)).stt_sell == 0.0015
+
+
 def test_cost_model_from_config():
     c = CostModel.from_dict({"brokerage_per_order": 10, "exchange_txn": {"BFO": 0.0005}})
     assert c.brokerage_per_order == 10 and c.txn_rate(Exchange.BFO) == 0.0005
@@ -77,6 +89,9 @@ def test_lot_sizes_by_expiry():
     from datetime import date
     from data.underlyings import get_underlying
     nifty, sensex = get_underlying("NIFTY"), get_underlying("SENSEX")
+    assert nifty.lot_size(date(2022, 6, 2)) == 50
+    assert nifty.lot_size(date(2024, 12, 26)) == 25 and nifty.lot_size(date(2025, 1, 2)) == 75
+    assert sensex.lot_size(date(2025, 1, 3)) == 10 and sensex.lot_size(date(2025, 1, 7)) == 20
     assert nifty.lot_size(date(2025, 12, 23)) == 75
     assert nifty.lot_size(date(2026, 1, 6)) == 65
     assert sensex.lot_size(date(2025, 9, 4)) == 20

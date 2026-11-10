@@ -108,6 +108,14 @@ def test_skip_expiry_day(store, skip, expected_fills):
     assert len(result.fills) == expected_fills
 
 
+@pytest.mark.parametrize("max_dte, expected_fills", [(None, 8), (1, 8), (0, 0)])
+def test_max_days_to_expiry(store, max_dte, expected_fills):
+    # Mon 8 Sep, expiry Tue 9 Sep: 1 day away.
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "max_days_to_expiry": max_dte})
+    assert len(result.fills) == expected_fills
+
+
 @pytest.mark.parametrize("vix_min, vix_max, expected_fills", [
     (14, None, 8), (16, None, 0), (None, 14, 0), (None, 16, 8), (14, 16, 8),
 ])

@@ -44,7 +44,6 @@ pytest
 ## Paper trading
 
 ```sh
-copy paper_trader\.env.example paper_trader\.env   # STRATEGY=vix_iron_fly, CAPITAL=500000
 start_paper_trading.bat                # double-click: bot + dashboard in two windows
 python -m paper_trader.runner          # runs every trading day until Ctrl+C
 python -m paper_trader.runner --once   # just today's session
@@ -56,6 +55,33 @@ SL-M stops trigger on candle highs. Output goes to `paper_trader/logs/`
 (`fills.csv`, `daily.csv`, `equity.csv`, a log per day). State is saved after
 every bar, so a restart resumes open positions and stop-losses instead of
 re-entering; only one bot can run at a time.
+
+### Telegram notifications
+
+Set `TELEGRAM_BOT_TOKEN` (from @BotFather) and `TELEGRAM_CHAT_ID` in
+`.env` and the bot messages each entry, stop-loss and exit with its
+P&L, INDmoney's answer to each mirrored order, safety alerts, and a day-end
+summary. `python -m paper_trader.notify chat-id` finds your chat id after you
+message the bot once; `python -m paper_trader.notify test` sends a test message.
+
+### Live order mirroring (empty account)
+
+With `LIVE_ORDERS=mirror` in `.env`, the paper bot also sends each
+order it places to INDmoney for real (market orders; stop-losses as GTT smart
+orders). The account is meant to hold no money, so every order is rejected for
+margin. A rejection has no fill price, so for each order `live_trader/mirror.py`
+records the live 5-level order book at the moment of sending and what it would
+have filled our quantity at (`live_trader/logs/orders.csv`), every status
+INDmoney reports, with rejection reasons and GTT trigger times (`events.csv`),
+and the paper fill vs that book price (`compare.csv`).
+
+Safeguards:
+- Nothing is sent if INDmoney reports more than `LIVE_MAX_BALANCE` (default Rs 100) available.
+- Orders from bars replayed after a late start are never sent, and there is a daily cap.
+- Open orders are cancelled at day end and on restart.
+- An order that fills anyway is flattened at once, and mirroring stops for the day.
+
+Needs the PC's static IP registered at indstocks.com/app/api-trading/access-tokens.
 
 ### Simulating past sessions
 
@@ -100,7 +126,7 @@ intrinsic value against the index close.
 
 ## Secrets
 
-- Credentials live only in `.env` files, which are git-ignored (`.env.example` files hold placeholders).
+- Credentials and settings live only in the root `.env`, which is git-ignored (`.env.example` holds placeholders).
 - The pre-commit hook (`scripts/check_secrets.py`) blocks staged `.env`/key files and token-like values.
 - Wrap secrets with `core.config.secret()`; the value is masked in logs and reprs.
 - INDmoney: with TOTP configured, tokens are generated automatically (cached in git-ignored

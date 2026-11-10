@@ -1,4 +1,4 @@
-"""Environment / secrets loading. Secrets live only in git-ignored .env files."""
+"""Environment / secrets loading. Every setting and secret lives in the one git-ignored root .env."""
 from __future__ import annotations
 
 import os
@@ -24,11 +24,11 @@ class Secret:
     __str__ = __repr__
 
 
-def load_env(*extra: Path) -> None:
-    """Load the root .env plus any bot-specific .env files (earlier files win)."""
-    for path in (*extra, ROOT / ".env"):
-        if path.exists():
-            load_dotenv(path, override=False)
+def load_env() -> None:
+    """Load the root .env (variables already set in the environment win)."""
+    path = ROOT / ".env"
+    if path.exists():
+        load_dotenv(path, override=False)
 
 
 def env(name: str, default: str | None = None) -> str | None:

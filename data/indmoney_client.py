@@ -1,8 +1,9 @@
-"""Thin wrapper over the INDstocks (INDmoney) REST API -- market data only.
+"""Thin wrapper over the INDstocks (INDmoney) REST API: market data, plus funds / orders for live_trader.
 
 Docs: https://api-docs.indstocks.com
 Auth: raw access token in the `Authorization` header (see data/indmoney_auth.py).
 Rate limit for data APIs: 5 req/s, 100k/day -> we stay under with a client-side limiter.
+Placing, modifying and cancelling orders needs the caller's static IP whitelisted on indstocks.com.
 """
 from __future__ import annotations
 
@@ -122,6 +123,57 @@ class IndMoneyClient:
         if isinstance(body, dict) and body.get("success") is False:
             raise IndMoneyError(f"GET {path} error: {body}")
         return body.get("data") if isinstance(body, dict) else body
+
+    def _send(self, method: str, path: str, body: dict) -> dict:
+        """One JSON request (orders, order lookups). Never retried on errors or timeouts: a retried order
+        placement could be a duplicate order. Only an auth failure (rejected before any order logic) is
+        retried once with a fresh token. Returns the parsed envelope; raises on HTTP errors."""
+        self._session.headers["Authorization"] = self._token_provider(None).get()
+        for attempt in range(2):
+            self._limiter.wait()
+            resp = self._session.request(method, BASE_URL + path, json=body, timeout=15)
+            if _is_auth_failure(resp) and attempt == 0:
+                log.warning("Access token rejected (HTTP %s); refreshing", resp.status_code)
+                self._session.headers["Authorization"] = self._token_provider(self._session.headers["Authorization"]).get()
+                continue
+            try:
+                parsed = resp.json()
+            except ValueError:
+                parsed = {"status": "error", "message": resp.text[:500]}
+            if not resp.ok or (isinstance(parsed, dict) and parsed.get("status") == "error"):
+                raise IndMoneyError(f"{method} {path} failed: HTTP {resp.status_code}: {str(parsed)[:500]}")
+            return parsed
+        raise IndMoneyError(f"{method} {path}: unauthorized even after refreshing the token")
+
+    # ---- funds / orders (live_trader) -------------------------------------
+
+    def funds(self) -> dict:
+        return self._json("/funds")
+
+    def order_book(self) -> list[dict]:
+        return self._json("/order-book") or []
+
+    def order(self, order_id: str, segment: str = "DERIVATIVE") -> dict:
+        return self._send("GET", "/order", {"order_id": order_id, "segment": segment}).get("data") or {}
+
+    def place_order(self, body: dict) -> dict:
+        """POST /order. Returns data: {order_id, order_status}. The fill or rejection shows up later in the
+        order book (status FAILED / ABORTED with the reason in extra_info)."""
+        return self._send("POST", "/order", body).get("data") or {}
+
+    def cancel_order(self, order_id: str, segment: str = "DERIVATIVE") -> dict:
+        return self._send("POST", "/order/cancel", {"order_id": order_id, "segment": segment}).get("data") or {}
+
+    def place_smart_order(self, body: dict) -> dict:
+        """POST /smart/order (GTT). Returns data: {order_data: [{order_id, order_status, child_order_details}]}."""
+        return self._send("POST", "/smart/order", body).get("data") or {}
+
+    def cancel_smart_order(self, order_id: str, segment: str = "DERIVATIVE") -> dict:
+        return self._send("POST", "/smart/order/cancel", {"order_id": order_id, "segment": segment}).get("data") or {}
+
+    def market_depth(self, scrip_codes: list[str]) -> dict[str, dict]:
+        """5-level order book per scrip code (e.g. NFO_51011): {code: {"market_depth": {"depth": [...]}}}."""
+        return self._json("/market/quotes/mkt", {"scrip-codes": ",".join(scrip_codes)}) or {}
 
     # ---- account --------------------------------------------------------
 

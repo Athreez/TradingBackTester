@@ -130,13 +130,13 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--from", dest="start", required=True, type=date.fromisoformat)
     p.add_argument("--to", dest="end", required=True, type=date.fromisoformat)
-    p.add_argument("--strategy", help="default: STRATEGY from paper_trader/.env")
-    p.add_argument("--capital", type=float, help="default: CAPITAL from paper_trader/.env")
+    p.add_argument("--strategy", help="default: STRATEGY from .env")
+    p.add_argument("--capital", type=float, help="default: CAPITAL from .env")
     p.add_argument("--into-paper-account", action="store_true",
                    help="make the simulated sessions the paper account's history (old files are backed up)")
     args = p.parse_args()
 
-    load_env(HERE / ".env")
+    load_env()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger().handlers[0].setLevel(logging.WARNING)  # console: problems only; full detail in the logs
     name = args.strategy or env("STRATEGY") or "vix_iron_fly"

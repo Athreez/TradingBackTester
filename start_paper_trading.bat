@@ -9,8 +9,8 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
-if not exist "paper_trader\.env" (
-    echo paper_trader\.env not found. Copy paper_trader\.env.example to paper_trader\.env first.
+if not exist ".env" (
+    echo .env not found. Copy .env.example to .env and fill it in first.
     pause
     exit /b 1
 )

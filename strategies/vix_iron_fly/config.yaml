@@ -3,10 +3,17 @@ interval: 1minute      # candle interval the strategy runs on
 data_start: 2025-04-02 # INDmoney expired contracts start Apr 2025 (SENSEX 1-Apr expiry missing)
 capital: 500000
 
-# Special sessions left out of backtests entirely (data stays in the cache).
+# Special sessions left out of backtests entirely (data stays in the cache). Full-day weekend
+# sessions (Sat 20-Jan-2024, Budget days 1-Feb-2025 and 1-Feb-2026) are traded normally.
 exclude_dates:
+  - 2021-11-04  # Diwali Muhurat trading (18:15-19:15)
+  - 2022-10-24  # Diwali Muhurat trading (18:15-19:15)
+  - 2023-11-12  # Diwali Muhurat trading (18:15-19:15)
+  - 2024-03-02  # NSE disaster-recovery test session, Saturday, closed 12:30 (before exit_time)
+  - 2024-05-18  # NSE disaster-recovery test session, Saturday, closed 12:30 (before exit_time)
+  - 2024-11-01  # Diwali Muhurat trading (18:00-19:00)
   - 2025-10-21  # Diwali Muhurat trading (13:45-14:45)
-  - 2026-11-08  # Diwali Muhurat trading (Sunday, 14:20-15:30)
+  - 2026-11-08  # Diwali Muhurat trading (14:20-15:30)
 
 # Overrides for core/costs.py CostModel. Defaults = INDmoney API option charges (preset: zerodha for Zerodha).
 costs:
@@ -24,6 +31,7 @@ params:
     limit_buffer_pct: 5
     chase_after_minutes: 1
   skip_expiry_day: false     # expiry days are traded
+  max_days_to_expiry: null   # e.g. 1 = trade only on expiry day and the day before (calendar days)
   # India VIX at entry picks the day's stop-loss; VIX in 11..14 -> no trade.
   vix_regimes:
     - {vix_below: 11, stop_loss_pct: 40}

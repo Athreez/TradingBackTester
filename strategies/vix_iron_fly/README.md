@@ -43,20 +43,44 @@ Expiry days are traded. Lot sizes come from `data/underlyings.py` by expiry date
 - **Exit 14:45:** square off everything still open.
 - One trade per day, no re-entry.
 
-Backtest, 2 Apr 2025 - 3 Nov 2026, 1 lot, GTT stop-limits, INDmoney charges:
-net +1,22,312 (+24.5%), max drawdown -21,512, 208 days traded, 66% winners
-(Apr - Aug 2025: 53 days, +51,986; Sep 2025 onwards: 155 days, +70,326).
-Charges 26,739 over 1,664 orders; at Zerodha's Rs 20 brokerage the net would be
-19,635 lower. VIX thresholds and stop
-levels were chosen on the Sep 2025 onwards data, so only Apr - Aug 2025 is
-out-of-sample. INDmoney has no expired contracts before Apr 2025.
+Backtest, 2 Apr 2025 - 9 Nov 2026 (INDmoney data), 1 lot, GTT stop-limits,
+INDmoney charges: net +1,33,584 (+26.7%), max drawdown -21,518, 212 days traded,
+66% winners (Apr - Aug 2025: 53 days, +52,381; Sep 2025 onwards: 159 days,
++81,203). Charges 26,401 over 1,696 orders. VIX thresholds and stop levels were
+chosen on the Sep 2025 onwards data, so only Apr - Aug 2025 is out-of-sample.
 
 Charges model: core/costs.py reproduces INDmoney's own /margin itemisation for
 API option orders (exchange 0.03503% and IPFT 0.0005% on NSE and BSE alike, GST
-not on IPFT; tested against 8 of its totals). The Apr 2025 figures above were
-run with Rs 10 brokerage on the earlier exchange rates, a few paise per order
-different. Sep 2025 - 5 Nov 2026 with the exact model: net +72,284 (charges
-20,037) vs +57,509 at Zerodha's charges (34,812); max drawdown -21,518.
+not on IPFT; tested against 8 of its totals), and charges older trades the STT
+and exchange rates of their date (STT on sold options 0.05% until Mar 2023,
+0.0625% until Sep 2024, 0.1% until Mar 2026, 0.15% since).
+
+### Five years (Hugging Face data)
+
+INDmoney has no expired contracts before Apr 2025. `python -m data.import_hf`
+builds a store from the codepyx23/india-index-options-1m dataset (NIFTY weeklies
+from 2021, SENSEX weeklies from Aug 2023) for `backtester.run --data-root
+data/cache/hf_store`. India VIX there is 1-minute from 21 May 2024 and the day's
+opening VIX before that (same VIX regime as 09:22 on 91% of days). Where both
+datasets overlap (Apr 2025 - Jul 2026) they agree on 98.8% of traded days' sign.
+
+2 Aug 2021 - 2 Jul 2026, 1 lot (lot sizes of each period):
+
+| Year | Net    | `max_days_to_expiry: 1` |
+|------|--------|-------------------------|
+| 2021 (Aug-Dec) | +14,865 | +17,323 |
+| 2022 | -1,588 | +28,343 |
+| 2023 | -14,412 | -10,315 |
+| 2024 | +37,489 | +40,683 |
+| 2025 | +1,02,926 | +1,00,126 |
+| 2026 (to Jul) | +25,022 | +30,334 |
+| **Total** | **+1,64,302**, max DD -25,547, 747 days | **+2,06,494**, max DD -17,352, 422 days |
+
+Almost all the profit is on expiry day and the day before; 2+ days out lost money
+in both 2021-2023 and 2024-2026, and was most of what was traded before SENSEX
+weeklies existed (Aug 2023). On the INDmoney period `max_days_to_expiry: 1` gives
++1,36,846 (max DD -11,432, 169 days) vs +1,33,584. That rule was found on this
+same data, so it is in-sample; it is off by default.
 
 GTT stop-limits vs SL-M over the same period: of 233 stops, 2 filled a minute
 later than SL-M would have; net -532. A 2% buffer costs -2,948, a 10% buffer

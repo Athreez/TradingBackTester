@@ -59,7 +59,7 @@ def test_short_call_held_to_expiry(store):
     data = HistoricalMarketData(store, "1minute")
     timeline = [t.to_pydatetime() for t in data.index_frame("NIFTY").index]
     no_costs = CostModel(brokerage_per_order=0, stt_sell=0, stt_exercise=0, sebi_fee=0, stamp_duty_buy=0,
-                         gst=0, exchange_txn={}, ipft={})
+                         gst=0, exchange_txn={}, ipft={}, history=())
     broker = SimBroker(lambda i: data.bar_at(i, data.now()), no_costs, 100_000)
     strategy = SellOneCall({})
 
