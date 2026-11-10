@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 from datetime import date, datetime
+from pathlib import Path
 
 import yaml
 
@@ -31,7 +32,7 @@ def run_backtest(strategy_name: str, start: date, end: date, store: DataStore | 
     interval = config.get("interval", "1minute")
     underlyings = config["underlyings"]
     capital = capital or float(config.get("capital", 500_000))
-    data_start = config.get("data_start")
+    data_start = config.get("data_start") if store is None else None  # data_start describes data/cache
     if data_start and start < data_start:
         print(f"Note: {strategy_name} only uses data from {data_start}; ignoring {start} -> {data_start}")
         start = data_start
@@ -64,6 +65,8 @@ def main() -> None:
     p.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE",
                    help="override a strategy param, dotted path into config.yaml params (repeatable)")
     p.add_argument("--label", default="", help="suffix for the report folder name")
+    p.add_argument("--data-root", type=Path, help="DataStore folder to use instead of data/cache "
+                   "(e.g. data/cache/hf_store from data.import_hf)")
     args = p.parse_args()
 
     if args.list:
@@ -79,8 +82,10 @@ def main() -> None:
             p.error(f"--set expects KEY=VALUE, got '{item}'")
         overrides[key.strip()] = yaml.safe_load(value)
 
-    result = run_backtest(args.strategy, args.start, args.end, capital=args.capital, overrides=overrides)
+    store = DataStore(args.data_root) if args.data_root else None
+    result = run_backtest(args.strategy, args.start, args.end, store=store, capital=args.capital, overrides=overrides)
     result.meta["overrides"] = overrides
+    result.meta["data_root"] = str(args.data_root or "data/cache")
     summary = summarize(result)
 
     label = "_" + re.sub(r"[^A-Za-z0-9_-]", "", args.label) if args.label else ""
