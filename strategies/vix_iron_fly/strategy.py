@@ -60,6 +60,8 @@ class VixIronFly(Strategy):
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
         self.schedule: dict[str, dict] = params["schedule"]
+        # Trade only when the chosen expiry is at most this many calendar days away (null = any).
+        self.max_dte = params.get("max_days_to_expiry")
         self._day: date | None = None
 
     def _pick_underlying(self, ctx: Context, today: date) -> tuple[str, dict] | None:
@@ -172,6 +174,12 @@ class VixIronFly(Strategy):
     def _enter(self, ctx: Context) -> None:
         underlying, cfg = self.today
         self.state = "DONE"  # unless every leg is found below
+
+        if self.max_dte is not None:
+            dte = (min(e for e in ctx.data.expiries(underlying) if e >= self._day) - self._day).days
+            if dte > self.max_dte:
+                self.note = f"{underlying} expiry is {dte} days away (max {self.max_dte}), no trade"
+                return
 
         if self.vix_min is not None or self.vix_max is not None or self.vix_regimes:
             vix = self.day_vix = ctx.data.index_value("INDIAVIX")
