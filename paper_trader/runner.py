@@ -200,6 +200,7 @@ class PaperBot:
         self.broker._quote = lambda inst: data.bar_at(inst, data.now())
         ctx = Context(data, self.broker)
         session_open = datetime.combine(today, SESSION_START)
+        mirror = self._make_mirror(feed, today)
 
         while ist_now() < datetime.combine(today, CLOSE_AT):
             now = ist_now()
@@ -230,16 +231,34 @@ class PaperBot:
                 run_bar(self.strategy, ctx, self.broker, data, ts)
                 self.last_bar = ts
                 self._log_new_fills()
+                if mirror:  # only the latest bar is live; older ones are catch-up after a late start
+                    mirror.sync(self.broker, ts, live=completed - ts < 2 * BAR)
                 _append_csv(LOG_DIR / "equity.csv", {"ts": ts, "equity": round(self.broker.equity(data.ltp), 2)})
                 self._save()
+            if mirror:
+                mirror.poll()
             self._write_snapshot(data, "trading session")
             _pause(POLL_SECONDS)
 
         close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, LOG_DIR)
+        if mirror:
+            mirror.sync(self.broker, self.last_bar, live=False)
+            mirror.close_day()
         self._log_new_fills()
         self.day_closed = True
         self._save()
         self._write_snapshot(data, "session closed")
+
+    def _make_mirror(self, feed: LiveFeed, today: date):
+        """LIVE_ORDERS=mirror in paper_trader/.env: also send every order to INDmoney (see live_trader/mirror.py)."""
+        if env("LIVE_ORDERS", "off") != "mirror":
+            return None
+        from live_trader.mirror import OrderMirror
+        mirror = OrderMirror(self.client, feed._symbol_to_code, today, HERE.parent / "live_trader",
+                             max_balance=float(env("LIVE_MAX_BALANCE", "100")))
+        mirror.start(self.broker)
+        log.info("Live order mirroring ON%s", f" but halted: {mirror.halted}" if mirror.halted else "")
+        return mirror
 
     def _write_snapshot(self, data: HistoricalMarketData | None, phase: str) -> None:
         write_snapshot(SNAPSHOT_PATH, phase=phase, strategy_name=self.strategy_name, broker=self.broker,
@@ -290,6 +309,10 @@ def setup_day_logfile(log_dir: Path, day: date, fmt: logging.Formatter | None = 
 def close_day(strategy, ctx: Context, broker: SimBroker, data: HistoricalMarketData, day: date,
               last_bar: datetime | None, log_dir: Path) -> dict:
     """Settle anything expiring today, append the day's row to daily.csv and return it."""
+    if not (last_bar and last_bar.date() == day) and not any(f.ts.date() == day for f in broker.fills()):
+        log.info("=== %s: no candles all day (market holiday?), no daily row", day)
+        return {"date": day, "fills": 0, "gross": 0, "charges": 0, "net": 0,
+                "equity": round(broker.equity(lambda inst: None), 2)}  # no candles: positions at cost
     if last_bar and last_bar.date() == day:
         data.set_time(last_bar)
         for fill in settle_expiring(broker, data, last_bar):

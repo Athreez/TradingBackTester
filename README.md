@@ -57,6 +57,25 @@ SL-M stops trigger on candle highs. Output goes to `paper_trader/logs/`
 every bar, so a restart resumes open positions and stop-losses instead of
 re-entering; only one bot can run at a time.
 
+### Live order mirroring (empty account)
+
+With `LIVE_ORDERS=mirror` in `paper_trader/.env`, the paper bot also sends each
+order it places to INDmoney for real (market orders; stop-losses as GTT smart
+orders). The account is meant to hold no money, so every order is rejected for
+margin. A rejection has no fill price, so for each order `live_trader/mirror.py`
+records the live 5-level order book at the moment of sending and what it would
+have filled our quantity at (`live_trader/logs/orders.csv`), every status
+INDmoney reports, with rejection reasons and GTT trigger times (`events.csv`),
+and the paper fill vs that book price (`compare.csv`).
+
+Safeguards:
+- Nothing is sent if INDmoney reports more than `LIVE_MAX_BALANCE` (default Rs 100) available.
+- Orders from bars replayed after a late start are never sent, and there is a daily cap.
+- Open orders are cancelled at day end and on restart.
+- An order that fills anyway is flattened at once, and mirroring stops for the day.
+
+Needs the PC's static IP registered at indstocks.com/app/api-trading/access-tokens.
+
 ### Simulating past sessions
 
 ```sh
