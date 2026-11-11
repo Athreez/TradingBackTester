@@ -121,17 +121,21 @@ def style(chart: alt.Chart, c: dict) -> alt.Chart:
     ).configure_view(strokeWidth=0)
 
 
-def line_chart(df: pd.DataFrame, x: str, y: str, x_title: str, x_format: str, c: dict) -> alt.Chart:
+def line_chart(df: pd.DataFrame, x: str, y: str, x_title: str, x_format: str, c: dict,
+               y_title: str = "Equity (₹)", label: str = "Equity", zero_line: bool = False) -> alt.Chart:
     hover = alt.selection_point(fields=[x], nearest=True, on="pointerover", empty=False)
     base = alt.Chart(df).encode(x=alt.X(f"{x}:T", title=x_title, axis=alt.Axis(format=x_format, grid=False)))
     line = base.mark_line(color=c["line"], strokeWidth=2).encode(
-        y=alt.Y(f"{y}:Q", title="Equity (₹)", scale=alt.Scale(zero=False)))
+        y=alt.Y(f"{y}:Q", title=y_title, scale=alt.Scale(zero=False)))
     points = base.mark_point(size=80, filled=True, color=c["line"]).encode(
         y=f"{y}:Q", opacity=alt.condition(hover, alt.value(1), alt.value(0)),
-        tooltip=[alt.Tooltip(f"{x}:T", title="Time", format=x_format), alt.Tooltip(f"{y}:Q", title="Equity", format=",.2f")],
+        tooltip=[alt.Tooltip(f"{x}:T", title="Time", format=x_format), alt.Tooltip(f"{y}:Q", title=label, format="+,.2f" if zero_line else ",.2f")],
     ).add_params(hover)
     rule = base.mark_rule(color=c["axis"]).encode(opacity=alt.condition(hover, alt.value(1), alt.value(0)))
-    return style((line + rule + points).properties(height=260), c)
+    layers = [line, rule, points]
+    if zero_line:  # P&L charts: mark break-even
+        layers.insert(0, alt.Chart(pd.DataFrame({"zero": [0]})).mark_rule(color=c["axis"], strokeDash=[4, 4]).encode(y="zero:Q"))
+    return style(alt.layer(*layers).properties(height=260), c)
 
 
 def pnl_bars(df: pd.DataFrame, c: dict) -> alt.Chart:
@@ -318,8 +322,10 @@ def dashboard() -> None:
     if not equity.empty:
         intraday = equity[equity["ts"].dt.date == today]
         if not intraday.empty:
-            st.markdown("**Equity today (per minute)**")
-            st.altair_chart(line_chart(intraday, "ts", "equity", "Time (IST)", "%H:%M", c), width="stretch")
+            st.markdown("**P&L today (per minute)**")
+            st.altair_chart(line_chart(intraday.assign(pnl=intraday["equity"] - start_equity), "ts", "pnl", "Time (IST)",
+                                       "%H:%M", c, y_title="Today's P&L (₹)", label="P&L", zero_line=True),
+                            width="stretch")
 
     # -- history -------------------------------------------------------------
     st.subheader("History")
