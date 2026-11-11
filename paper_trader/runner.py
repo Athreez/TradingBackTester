@@ -47,6 +47,7 @@ GRACE = timedelta(seconds=5)  # wait after a minute closes so the candle is publ
 POLL_SECONDS = 5
 AUTH_BACKOFF_SECONDS = 65  # INDmoney allows one token per minute
 LOGIN_BACKOFF_SECONDS = 120
+MIRROR_OFF = "turned off with /mirror off"
 
 log = logging.getLogger("paper")
 
@@ -126,9 +127,20 @@ class PaperBot:
         self.day_closed = False
         self._restore()
         self._fills_logged = len(self.broker.fills())
+        from paper_trader.commands import Controls
         from paper_trader.notify import Telegram, TradeNotifier
-        tg = Telegram.from_env()  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env, else off
-        self.notifier = TradeNotifier(tg) if tg else None
+        self.controls = Controls(STATE_PATH.parent / "controls.json")  # set by Telegram commands
+        self.tg = Telegram.from_env()  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env, else off
+        self.notifier = TradeNotifier(self.tg, muted=lambda: self.controls.get("muted")) if self.tg else None
+        self.mirror = None  # live_trader.mirror.OrderMirror for the current day, if on
+
+    def start_commands(self) -> None:
+        """Answer Telegram commands (/help) from a background thread."""
+        if self.tg is None:
+            return
+        from paper_trader.commands import CommandBot, CommandHandler, Paths
+        CommandBot(self.tg, CommandHandler(self.controls, Paths(SNAPSHOT_PATH, LOG_DIR, HERE.parent / "live_trader"),
+                                           now=ist_now)).start()
 
     # ---- state ----------------------------------------------------------
 
@@ -203,9 +215,10 @@ class PaperBot:
         self.broker._quote = lambda inst: data.bar_at(inst, data.now())
         ctx = Context(data, self.broker)
         session_open = datetime.combine(today, SESSION_START)
-        mirror = self._make_mirror(feed, today)
+        self.mirror = self._make_mirror(feed, today)
 
         while ist_now() < datetime.combine(today, CLOSE_AT):
+            self._apply_controls(ctx, feed, today)
             now = ist_now()
             symbols = sorted({i.symbol for i in self.broker.positions()}
                              | {o.instrument.symbol for o in self.broker.open_orders()})
@@ -235,33 +248,60 @@ class PaperBot:
                 self.last_bar = ts
                 live = completed - ts < 2 * BAR  # older bars are catch-up after a late start
                 self._log_new_fills(catch_up=not live)
-                if mirror:
-                    mirror.sync(self.broker, ts, live=live)
+                if self.mirror:
+                    self.mirror.sync(self.broker, ts, live=live)
                 _append_csv(LOG_DIR / "equity.csv", {"ts": ts, "equity": round(self.broker.equity(data.ltp), 2)})
                 self._save()
-            if mirror:
-                mirror.poll()
+            if self.mirror:
+                self.mirror.poll()
             self._write_snapshot(data, "trading session")
             _pause(POLL_SECONDS)
 
         row = close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, LOG_DIR)
-        if mirror:
-            mirror.sync(self.broker, self.last_bar, live=False)
-            mirror.close_day()
+        if self.mirror:
+            self.mirror.sync(self.broker, self.last_bar, live=False)
+            self.mirror.close_day()
         self._log_new_fills()
         if self.notifier and (self.last_bar and self.last_bar.date() == today):  # not on market holidays
             try:
                 self.notifier.day_summary(today, row, self.strategy, self.broker.initial_capital,
-                                          mirror.summary() if mirror else "")
+                                          self.mirror.summary() if self.mirror else "")
             except Exception as e:
                 log.warning("telegram day summary failed: %s", e)
         self.day_closed = True
         self._save()
         self._write_snapshot(data, "session closed")
 
+    def _mirror_wanted(self) -> bool:
+        """/mirror on|off from Telegram overrides LIVE_ORDERS in .env."""
+        override = self.controls.get("mirror")
+        return override if override is not None else env("LIVE_ORDERS", "off") == "mirror"
+
+    def _apply_controls(self, ctx: Context, feed: LiveFeed, today: date) -> None:
+        """Act on Telegram commands: /pause, /mirror, /exitnow (set from another thread)."""
+        self.strategy.paused = self.controls.get("paused")  # checked by the strategy at entry time
+        wanted = self._mirror_wanted()
+        if wanted and self.mirror is None:
+            self.mirror = self._make_mirror(feed, today)
+        elif self.mirror is not None:
+            if not wanted and not self.mirror.halted:
+                self.mirror.halted = MIRROR_OFF
+            elif wanted and self.mirror.halted == MIRROR_OFF:
+                self.mirror.halted = None  # safety stops (balance, fills, cap) are never undone here
+        if self.controls.exit_requested.is_set():
+            self.controls.exit_requested.clear()
+            had = bool(self.broker.positions() or self.broker.open_orders())
+            ctx.cancel_all()
+            ctx.square_off_all(tag="manual-exit")
+            self.strategy.state = "DONE"  # no (re-)entry for the rest of the day
+            self.strategy.note = (getattr(self.strategy, "note", "") or "") + "; closed via /exitnow"
+            log.warning("/exitnow from Telegram: %s", "closing all positions" if had else "nothing was open")
+            if self.notifier and not had:
+                self.notifier.alert("/exitnow: nothing was open; no entry for the rest of today")
+
     def _make_mirror(self, feed: LiveFeed, today: date):
-        """LIVE_ORDERS=mirror in .env: also send every order to INDmoney (see live_trader/mirror.py)."""
-        if env("LIVE_ORDERS", "off") != "mirror":
+        """Also send every order to INDmoney (see live_trader/mirror.py) when LIVE_ORDERS=mirror or /mirror on."""
+        if not self._mirror_wanted():
             return None
         from live_trader.mirror import OrderMirror
         mirror = OrderMirror(self.client, feed._symbol_to_code, today, HERE.parent / "live_trader",
@@ -271,8 +311,35 @@ class PaperBot:
         return mirror
 
     def _write_snapshot(self, data: HistoricalMarketData | None, phase: str) -> None:
+        mirror = ("off" if self.mirror is None and not self._mirror_wanted() else
+                  "on (starts with the session)" if self.mirror is None else
+                  f"stopped: {self.mirror.halted}" if self.mirror.halted else "on")
         write_snapshot(SNAPSHOT_PATH, phase=phase, strategy_name=self.strategy_name, broker=self.broker,
-                       strategy=self.strategy, data=data, day=self.day, last_bar=self.last_bar)
+                       strategy=self.strategy, data=data, day=self.day, last_bar=self.last_bar,
+                       extra={"paused": self.controls.get("paused"), "mirror": mirror, "plan": self._plan(data)})
+
+    def _plan(self, data: HistoricalMarketData | None) -> dict | None:
+        """Today's plan for /today: underlying, expiry, days to it, VIX now and the rule it gives."""
+        s = self.strategy
+        today = getattr(s, "today", None)
+        if not today or data is None or data._now is None or self.day is None:
+            return None
+        try:
+            underlying = today[0]
+            expiry = min(e for e in data.expiries(underlying) if e >= self.day)
+            vix = data.index_value("INDIAVIX")
+            rule = None
+            regimes = getattr(s, "vix_regimes", None)
+            if vix is not None and regimes:
+                from strategies.vix_iron_fly.strategy import _matches
+                hit = next((r for r in regimes if _matches(r, vix)), None)
+                rule = f"trade, stop-loss {hit['stop_loss_pct']}%" if hit else "no trade (VIX in the no-trade band)"
+            return {"underlying": underlying, "expiry": str(expiry), "dte": (expiry - self.day).days,
+                    "vix": vix, "rule": rule, "max_dte": getattr(s, "max_dte", None),
+                    "entry_time": str(getattr(s, "entry_time", ""))[:5], "exit_time": str(getattr(s, "exit_time", ""))[:5]}
+        except Exception as e:  # the plan is informational only
+            log.debug("plan unavailable: %s", e)
+            return None
 
     def _log_new_fills(self, catch_up: bool = False) -> None:
         new = self.broker.fills()[self._fills_logged:]
@@ -405,7 +472,9 @@ def main() -> None:
         raise SystemExit("Set STRATEGY in .env (see .env.example)")
     capital = float(env("CAPITAL")) if env("CAPITAL") else None
     lock = _single_instance_lock()  # noqa: F841 (held until exit)
-    PaperBot(name, capital).run(once=args.once)
+    bot = PaperBot(name, capital)
+    bot.start_commands()
+    bot.run(once=args.once)
 
 
 if __name__ == "__main__":

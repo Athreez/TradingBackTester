@@ -64,6 +64,14 @@ P&L, INDmoney's answer to each mirrored order, safety alerts, and a day-end
 summary. `python -m paper_trader.notify chat-id` finds your chat id after you
 message the bot once; `python -m paper_trader.notify test` sends a test message.
 
+The running bot also answers commands from that chat only (`/help` lists them):
+`/status`, `/today`, `/pnl`, `/history 10`, `/live`, `/health`, `/log 20`, and
+the switches `/pause` / `/resume` (skip new entries), `/exitnow` (close
+everything, after a YES), `/mirror on|off` and `/mute` / `/unmute` (alerts always
+come through). Switches are kept in `paper_trader/state/controls.json`. Only one
+program can read the bot's messages, so `notify chat-id` gets nothing while the
+bot is running.
+
 ### Live order mirroring (empty account)
 
 With `LIVE_ORDERS=mirror` in `.env`, the paper bot also sends each

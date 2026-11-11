@@ -108,6 +108,12 @@ def test_skip_expiry_day(store, skip, expected_fills):
     assert len(result.fills) == expected_fills
 
 
+def test_paused_skips_the_entry(store, monkeypatch):
+    monkeypatch.setattr(VixIronFly, "paused", True, raising=False)  # what Telegram /pause sets on the instance
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store, overrides=BASE)
+    assert result.fills == []
+
+
 @pytest.mark.parametrize("max_dte, expected_fills", [(None, 8), (1, 8), (0, 0)])
 def test_max_days_to_expiry(store, max_dte, expected_fills):
     # Mon 8 Sep, expiry Tue 9 Sep: 1 day away.

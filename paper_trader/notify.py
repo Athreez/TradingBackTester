@@ -59,6 +59,13 @@ class Telegram:
         while not self._q.empty() and time.monotonic() < end:
             time.sleep(0.2)
 
+    def call(self, method: str, payload: dict, timeout: float = 15) -> dict:
+        """A direct Bot API call (e.g. getUpdates for commands); returns its `result`, raises on failure."""
+        body = self.session.post(API.format(token=self.token, method=method), json=payload, timeout=timeout).json()
+        if not body.get("ok"):
+            raise RuntimeError(f"telegram {method}: {body.get('description')}")
+        return body.get("result")
+
     def _post(self, text: str) -> bool:
         resp = self.session.post(API.format(token=self.token, method="sendMessage"), timeout=15, json={
             "chat_id": self.chat_id, "text": text[:4000], "parse_mode": "HTML", "disable_web_page_preview": True})
@@ -82,8 +89,13 @@ class Telegram:
 class TradeNotifier:
     """Turns the bot's fills and day results into short Telegram messages."""
 
-    def __init__(self, tg: Telegram):
+    def __init__(self, tg: Telegram, muted=lambda: False):
         self.tg = tg
+        self.muted = muted  # /mute: trade messages stop, alerts still go out
+
+    def _send(self, text: str) -> None:
+        if not self.muted():
+            self.tg.send(text)
 
     def fills(self, fills: list[Fill], all_fills: list[Fill], strategy, catch_up: bool = False) -> None:
         if not fills:
@@ -99,21 +111,22 @@ class TradeNotifier:
             lines += [f"{f.side.value} {short_name(f.instrument.symbol)} × {f.quantity} @ {f.price:.2f}" for f in entries]
             credit = sum(f.quantity * f.price * (1 if f.side is Side.SELL else -1) for f in entries)
             lines.append(f"Net credit {inr(credit)}")
-            self.tg.send("\n".join(l for l in lines if l))
+            self._send("\n".join(l for l in lines if l))
         for f in exits:
             kind = f.tag.split(":")[0]
             title = {"sl": "🔴 <b>STOP-LOSS</b>", "hedge-exit": "↩️ Hedge exit", "exit-time": "⏹ <b>EXIT 14:45</b>",
-                     "sl-exit": "🔴 Exit after stop-loss", "expiry-settlement": "📅 Expiry settlement"}.get(kind, f.tag)
+                     "sl-exit": "🔴 Exit after stop-loss", "expiry-settlement": "📅 Expiry settlement",
+                     "manual-exit": "🛑 <b>Closed via /exitnow</b>"}.get(kind, f.tag)
             opened = [o for o in all_fills if o.instrument == f.instrument and o.side is not f.side
                       and o.ts.date() == f.ts.date() and o.ts <= f.ts]
             pnl = ""
             if opened:
                 entry = opened[-1].price
                 pnl = f" (entry {entry:.2f}, {inr((f.price - entry) * f.quantity * (1 if f.side is Side.SELL else -1), True)})"
-            self.tg.send(f"{title}{late}\n{f.side.value} {short_name(f.instrument.symbol)} × {f.quantity} @ {f.price:.2f}{pnl}")
+            self._send(f"{title}{late}\n{f.side.value} {short_name(f.instrument.symbol)} × {f.quantity} @ {f.price:.2f}{pnl}")
 
     def live_event(self, tag: str, symbol: str, status: str, info: str) -> None:
-        self.tg.send(f"🏦 INDmoney {short_name(symbol)} [{tag}]: <b>{html.escape(status)}</b>"
+        self._send(f"🏦 INDmoney {short_name(symbol)} [{tag}]: <b>{html.escape(status)}</b>"
                      + (f"\n{html.escape(info)}" if info else ""))
 
     def alert(self, text: str) -> None:
@@ -122,7 +135,7 @@ class TradeNotifier:
     def day_summary(self, day: date, row: dict, strategy, initial_capital: float, mirror_stats: str = "") -> None:
         if not row.get("fills"):
             note = getattr(strategy, "note", "") or "no trade"
-            self.tg.send(f"📊 <b>{day:%a %d %b}</b>: no trade\n{html.escape(note)}\nEquity {inr(row['equity'])}")
+            self._send(f"📊 <b>{day:%a %d %b}</b>: no trade\n{html.escape(note)}\nEquity {inr(row['equity'])}")
             return
         today = getattr(strategy, "today", None)
         lines = [f"📊 <b>{day:%a %d %b} {today[0] if today else ''}</b>",
@@ -131,7 +144,7 @@ class TradeNotifier:
                  f"Equity {inr(row['equity'])} · since start {inr(row['equity'] - initial_capital, True)}"]
         if mirror_stats:
             lines.append(mirror_stats)
-        self.tg.send("\n".join(l for l in lines if l))
+        self._send("\n".join(l for l in lines if l))
 
 
 def main() -> None:

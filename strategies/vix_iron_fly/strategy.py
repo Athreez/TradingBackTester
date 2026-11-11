@@ -137,6 +137,10 @@ class VixIronFly(Strategy):
             return
 
         if self.state == "IDLE" and self.entry_time <= clock.time() < self.exit_time:
+            if getattr(self, "paused", False):  # set by the paper bot's Telegram /pause
+                self.state = "DONE"
+                self.note = "entry skipped: paused with /pause"
+                return
             if clock - datetime.combine(clock.date(), self.entry_time) > self.entry_window:
                 self.state = "DONE"  # session started late (e.g. Muhurat trading): no trade today
                 self.note = "session started after the entry window, no trade"
