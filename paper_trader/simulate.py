@@ -30,6 +30,7 @@ from backtester.historical_data import HistoricalMarketData
 from backtester.sim_broker import SimBroker
 from core.config import env, load_env
 from core.costs import CostModel
+from core.logsafe import protect_handlers
 from core.registry import load_strategy
 from core.strategy_base import Context
 from data.store import DataStore
@@ -138,6 +139,7 @@ def main() -> None:
 
     load_env()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    protect_handlers()
     logging.getLogger().handlers[0].setLevel(logging.WARNING)  # console: problems only; full detail in the logs
     name = args.strategy or env("STRATEGY") or "vix_iron_fly"
     capital = args.capital or (float(env("CAPITAL")) if env("CAPITAL") else None)

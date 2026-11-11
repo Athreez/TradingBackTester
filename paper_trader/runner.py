@@ -28,6 +28,7 @@ from backtester.sim_broker import SimBroker
 from core import models
 from core.config import env, load_env
 from core.costs import CostModel
+from core.logsafe import protect_handlers
 from core.models import Side
 from core.registry import load_strategy
 from core.strategy_base import Context
@@ -387,6 +388,7 @@ def setup_day_logfile(log_dir: Path, day: date, fmt: logging.Formatter | None = 
     fh = logging.FileHandler(log_dir / f"paper_{day:%Y%m%d}.log", encoding="utf-8")
     fh.setFormatter(fmt or logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.addHandler(fh)
+    protect_handlers(root)  # mask tokens and secrets in every log line
 
 
 def close_day(strategy, ctx: Context, broker: SimBroker, data: HistoricalMarketData, day: date,
@@ -467,6 +469,7 @@ def main() -> None:
 
     load_env()
     logging.basicConfig(level=env("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    protect_handlers()
     name = env("STRATEGY")
     if not name:
         raise SystemExit("Set STRATEGY in .env (see .env.example)")

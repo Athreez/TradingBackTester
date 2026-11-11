@@ -264,6 +264,8 @@ def main() -> None:
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from core.logsafe import protect_handlers
+    protect_handlers()  # mask tokens and secrets in every log line
     if args.cmd == "token":
         load_env()
         if args.new:
