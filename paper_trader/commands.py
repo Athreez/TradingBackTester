@@ -1,6 +1,7 @@
 """Telegram commands for the paper bot (/help lists them).
 
-A background thread long-polls Telegram for messages and answers only the configured TELEGRAM_CHAT_ID.
+A background thread long-polls Telegram for messages and answers only the chats in TELEGRAM_CHAT_IDS
+(others get no reply; their chat id is logged once so it can be whitelisted).
 Read-only commands answer from the files the bot already writes (state/live.json, logs/daily.csv, the
 day's log, live_trader/state), so they never touch the trading loop. Control commands only set flags in
 Controls (saved to state/controls.json); the trading loop applies them on its next pass.
@@ -84,9 +85,11 @@ class CommandHandler:
 
     def __init__(self, controls: Controls, paths: Paths, now=datetime.now):
         self.controls, self.paths, self.now = controls, paths, now
-        self._exit_asked_at: datetime | None = None
+        self._exit_asked: dict[str, datetime] = {}  # chat -> when it sent /exitnow (YES must come from that chat)
+        self._chat = ""
 
-    def handle(self, text: str) -> str:
+    def handle(self, text: str, chat: str | int = "") -> str:
+        self._chat = str(chat)
         parts = text.strip().split()
         if not parts:
             return ""
@@ -248,11 +251,11 @@ class CommandHandler:
         return "▶️ Entries allowed again (a day already skipped while paused stays skipped)."
 
     def cmd_exitnow(self, _="") -> str:
-        self._exit_asked_at = self.now()
+        self._exit_asked[self._chat] = self.now()
         return f"🛑 Close ALL open positions at market now? Reply <b>YES</b> within {CONFIRM_SECONDS}s."
 
     def _confirm_exit(self) -> str:
-        asked, self._exit_asked_at = self._exit_asked_at, None
+        asked = self._exit_asked.pop(self._chat, None)
         if asked is None or (self.now() - asked).total_seconds() > CONFIRM_SECONDS:
             return "Nothing to confirm (send /exitnow first)."
         self.controls.exit_requested.set()
@@ -278,9 +281,11 @@ class CommandHandler:
 class CommandBot:
     """Long-polls Telegram and answers commands from the one allowed chat."""
 
-    def __init__(self, tg, handler: CommandHandler):
+    def __init__(self, tg, handler: CommandHandler, blocked_path: Path | None = None):
         self.tg, self.handler = tg, handler
         self.offset: int | None = None
+        self._blocked_seen: set[str] = set()
+        self.blocked_path = blocked_path  # state/blocked_chats.json: chats that wrote but aren't whitelisted
 
     def start(self) -> None:
         try:
@@ -305,10 +310,29 @@ class CommandBot:
 
     def process(self, update: dict, started: float) -> None:
         msg = update.get("message") or {}
-        if str(msg.get("chat", {}).get("id")) != str(self.tg.chat_id):
-            return  # not you: ignore silently
+        chat = msg.get("chat", {})
+        chat_id = str(chat.get("id"))
+        if not self.tg.allowed(chat_id):  # not whitelisted: no reply; logged once so it can be added
+            if chat_id not in self._blocked_seen:
+                self._blocked_seen.add(chat_id)
+                who = chat.get("username") or chat.get("first_name") or chat.get("title") or "?"
+                log.warning("ignored Telegram message from chat %s (%s): not in TELEGRAM_CHAT_IDS", chat_id, who)
+                self._record_blocked(chat_id, who, msg.get("date", 0))
+            return
         if msg.get("date", 0) < started - STALE_UPDATE_SECONDS:
             return  # sent long before the bot started: don't act on it now
-        reply = self.handler.handle(msg.get("text") or "")
+        reply = self.handler.handle(msg.get("text") or "", chat=chat_id)
         if reply:
-            self.tg.send(reply)
+            self.tg.send(reply, chat_id=chat_id)  # answer only the chat that asked
+
+    def _record_blocked(self, chat_id: str, who: str, ts: int) -> None:
+        """Keep the ids of chats that tried, so one can be copied into TELEGRAM_CHAT_IDS."""
+        if self.blocked_path is None:
+            return
+        try:
+            seen = json.loads(self.blocked_path.read_text()) if self.blocked_path.exists() else {}
+            seen[chat_id] = {"name": who, "last_message": datetime.fromtimestamp(ts).isoformat(timespec="seconds")}
+            self.blocked_path.parent.mkdir(parents=True, exist_ok=True)
+            self.blocked_path.write_text(json.dumps(seen, indent=1))
+        except (OSError, ValueError) as e:
+            log.warning("could not record blocked chat: %s", e)

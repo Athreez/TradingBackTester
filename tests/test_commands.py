@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from paper_trader.commands import COMMANDS, CommandBot, CommandHandler, Controls, Paths
-from paper_trader.notify import TradeNotifier
+from paper_trader.notify import Telegram, TradeNotifier, parse_chat_ids
 
 NOW = datetime(2026, 11, 12, 11, 0)
 
@@ -106,26 +106,69 @@ def test_exitnow_needs_yes_within_a_minute(setup):
     assert controls.exit_requested.is_set()
 
 
+def test_exitnow_yes_must_come_from_the_chat_that_asked(setup):
+    h, controls, _, _ = setup
+    h.handle("/exitnow", chat="1000000001")
+    assert "Nothing to confirm" in h.handle("YES", chat="1000000002")
+    assert not controls.exit_requested.is_set()
+    assert "Closing everything" in h.handle("YES", chat="1000000001")
+
+
 class FakeTg:
-    chat_id = "1000000001"
+    chat_ids = ["1000000001", "1000000002"]
 
     def __init__(self):
         self.sent = []
 
-    def send(self, text):
-        self.sent.append(text)
+    def allowed(self, chat_id):
+        return str(chat_id) in self.chat_ids
+
+    def send(self, text, chat_id=None):
+        self.sent.append((chat_id, text))
 
 
-def test_only_answers_the_owner_and_fresh_messages(setup):
+def test_only_answers_whitelisted_chats_and_fresh_messages(setup, caplog, tmp_path):
     h, *_ = setup
     tg = FakeTg()
-    bot = CommandBot(tg, h)
+    bot = CommandBot(tg, h, blocked_path=tmp_path / "blocked_chats.json")
     started = 1_800_000_000
-    bot.process({"message": {"chat": {"id": 111}, "date": started, "text": "/status"}}, started)
+    bot.process({"message": {"chat": {"id": 111, "first_name": "Stranger"}, "date": started, "text": "/status"}}, started)
+    bot.process({"message": {"chat": {"id": 111}, "date": started, "text": "/pnl"}}, started)
     bot.process({"message": {"chat": {"id": 1000000001}, "date": started - 3600, "text": "/exitnow"}}, started)
     assert tg.sent == []
+    assert [r.getMessage() for r in caplog.records].count(
+        "ignored Telegram message from chat 111 (Stranger): not in TELEGRAM_CHAT_IDS") == 1  # logged once
+    assert json.loads((tmp_path / "blocked_chats.json").read_text())["111"]["name"] == "Stranger"
     bot.process({"message": {"chat": {"id": 1000000001}, "date": started + 5, "text": "/help"}}, started)
-    assert len(tg.sent) == 1 and "/exitnow" in tg.sent[0]
+    bot.process({"message": {"chat": {"id": 1000000002}, "date": started + 6, "text": "/help"}}, started)
+    assert [c for c, _ in tg.sent] == ["1000000001", "1000000002"]  # each reply goes to the chat that asked
+    assert "/exitnow" in tg.sent[0][1]
+
+
+@pytest.mark.parametrize("raw, ids", [
+    ("[1000000001, -1000000002]", ["1000000001", "-1000000002"]),
+    ("1000000001,1000000002", ["1000000001", "1000000002"]),
+    ('["1000000001"]', ["1000000001"]),
+    ("", []), (None, []), ("[]", []),
+])
+def test_parse_chat_ids(raw, ids):
+    assert parse_chat_ids(raw) == ids
+
+
+def test_notifications_go_to_every_whitelisted_chat():
+    posted = []
+
+    class Session:
+        def post(self, url, json, timeout):
+            posted.append(json["chat_id"])
+            return type("R", (), {"ok": True})()
+
+    tg = Telegram("123:abc", ["1000000001", "1000000002"], session=Session())
+    tg.send("hello")
+    tg.send("only you", chat_id="1000000002")
+    tg._q.join()
+    assert posted == ["1000000001", "1000000002", "1000000002"]
+    assert Telegram("123:abc", "1000000001", session=Session()).chat_ids == ["1000000001"]  # single id still works
 
 
 def test_mute_keeps_alerts(setup):
@@ -135,7 +178,7 @@ def test_mute_keeps_alerts(setup):
     controls.set("muted", True)
     n.live_event("hedge:CE", "NIFTY26NOV1724550CE", "FAILED", "margin")
     n.alert("account has money")
-    assert len(tg.sent) == 1 and "account has money" in tg.sent[0]
+    assert len(tg.sent) == 1 and tg.sent[0][0] is None and "account has money" in tg.sent[0][1]  # None = all chats
 
 
 def test_runner_applies_controls_without_logging_in(setup, tmp_path):

@@ -58,13 +58,16 @@ re-entering; only one bot can run at a time.
 
 ### Telegram notifications
 
-Set `TELEGRAM_BOT_TOKEN` (from @BotFather) and `TELEGRAM_CHAT_ID` in
+Set `TELEGRAM_BOT_TOKEN` (from @BotFather) and `TELEGRAM_CHAT_IDS=[id1, id2]` in
 `.env` and the bot messages each entry, stop-loss and exit with its
 P&L, INDmoney's answer to each mirrored order, safety alerts, and a day-end
-summary. `python -m paper_trader.notify chat-id` finds your chat id after you
-message the bot once; `python -m paper_trader.notify test` sends a test message.
+summary to every chat in that whitelist. `python -m paper_trader.notify chat-id`
+finds chat ids after you message the bot once (only while the bot is stopped);
+while it runs, a message from a chat not on the list is ignored and its id is
+logged once. `python -m paper_trader.notify test` sends a test message.
 
-The running bot also answers commands from that chat only (`/help` lists them):
+The running bot also answers commands from whitelisted chats only, each reply
+going to the chat that asked (`/help` lists them):
 `/status`, `/today`, `/pnl`, `/history 10`, `/live`, `/health`, `/log 20`, and
 the switches `/pause` / `/resume` (skip new entries), `/exitnow` (close
 everything, after a YES), `/mirror on|off` and `/mute` / `/unmute` (alerts always

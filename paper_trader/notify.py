@@ -1,7 +1,7 @@
 """Telegram notifications from the paper bot: entries, exits, live-mirror results and a day-end summary.
 
-Set TELEGRAM_BOT_TOKEN (from @BotFather) and TELEGRAM_CHAT_ID in .env; without them nothing
-is sent. Messages go out from a background thread with a few retries, so a slow or failing Telegram never
+Set TELEGRAM_BOT_TOKEN (from @BotFather) and TELEGRAM_CHAT_IDS=[id1, id2] in .env (the whitelist: every
+chat listed gets the messages and may send commands); without them nothing is sent. Messages go out from a background thread with a few retries, so a slow or failing Telegram never
 holds up or breaks the bot.
 
   python -m paper_trader.notify chat-id   # after messaging your bot once: prints your chat id
@@ -39,20 +39,34 @@ def short_name(symbol: str) -> str:
     return symbol
 
 
+def parse_chat_ids(raw: str | None) -> list[str]:
+    """TELEGRAM_CHAT_IDS: a JSON-style array `[111, -222]` (a plain `111,222` list works too)."""
+    raw = (raw or "").strip().strip("[]")
+    return [p.strip().strip("'\"") for p in raw.split(",") if p.strip().strip("'\"")]
+
+
 class Telegram:
-    def __init__(self, token: str, chat_id: str, session: requests.Session | None = None):
-        self.token, self.chat_id = token, chat_id
+    def __init__(self, token: str, chat_ids: list[str] | str, session: requests.Session | None = None):
+        self.token = token
+        self.chat_ids = [str(c) for c in ([chat_ids] if isinstance(chat_ids, (str, int)) else chat_ids)]
         self.session = session or requests.Session()
-        self._q: queue.Queue[str] = queue.Queue()
+        self._q: queue.Queue[tuple[str, str]] = queue.Queue()
         threading.Thread(target=self._worker, name="telegram", daemon=True).start()
 
     @classmethod
     def from_env(cls) -> "Telegram | None":
-        token, chat = env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID")
-        return cls(token, chat) if token and chat else None
+        """TELEGRAM_CHAT_IDS (whitelist, every chat gets the messages); old single TELEGRAM_CHAT_ID still works."""
+        token = env("TELEGRAM_BOT_TOKEN")
+        chats = parse_chat_ids(env("TELEGRAM_CHAT_IDS")) or parse_chat_ids(env("TELEGRAM_CHAT_ID"))
+        return cls(token, chats) if token and chats else None
 
-    def send(self, text: str) -> None:
-        self._q.put(text)
+    def allowed(self, chat_id) -> bool:
+        return str(chat_id) in self.chat_ids
+
+    def send(self, text: str, chat_id: str | int | None = None) -> None:
+        """To one chat (e.g. a command's reply), or to every whitelisted chat when chat_id is None."""
+        for chat in ([str(chat_id)] if chat_id is not None else self.chat_ids):
+            self._q.put((chat, text))
 
     def flush(self, timeout: float = 20) -> None:
         end = time.monotonic() + timeout
@@ -66,17 +80,17 @@ class Telegram:
             raise RuntimeError(f"telegram {method}: {body.get('description')}")
         return body.get("result")
 
-    def _post(self, text: str) -> bool:
+    def _post(self, chat: str, text: str) -> bool:
         resp = self.session.post(API.format(token=self.token, method="sendMessage"), timeout=15, json={
-            "chat_id": self.chat_id, "text": text[:4000], "parse_mode": "HTML", "disable_web_page_preview": True})
+            "chat_id": chat, "text": text[:4000], "parse_mode": "HTML", "disable_web_page_preview": True})
         return resp.ok
 
     def _worker(self) -> None:
         while True:
-            text = self._q.get()
+            chat, text = self._q.get()
             for attempt in range(4):
                 try:
-                    if self._post(text):
+                    if self._post(chat, text):
                         break
                 except Exception as e:  # network blip: retry, then give up on this message
                     log.debug("telegram send failed: %s", e)
@@ -160,11 +174,12 @@ def main() -> None:
         if not chats:
             raise SystemExit("No messages yet: send any message to your bot in Telegram, then run this again.")
         for cid, name in chats.items():
-            print(f"TELEGRAM_CHAT_ID={cid}   ({name})")
+            print(f"{cid}   ({name})")
+        print(f"\nAdd the ones you want to .env, e.g.  TELEGRAM_CHAT_IDS=[{', '.join(map(str, chats))}]")
     elif cmd == "test":
         tg = Telegram.from_env()
         if tg is None:
-            raise SystemExit("Set TELEGRAM_CHAT_ID too (python -m paper_trader.notify chat-id).")
+            raise SystemExit("Set TELEGRAM_CHAT_IDS too (python -m paper_trader.notify chat-id).")
         tg.send("✅ Trading bot notifications are working.")
         tg.flush()
         print("sent")

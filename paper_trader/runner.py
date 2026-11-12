@@ -141,7 +141,7 @@ class PaperBot:
             return
         from paper_trader.commands import CommandBot, CommandHandler, Paths
         CommandBot(self.tg, CommandHandler(self.controls, Paths(SNAPSHOT_PATH, LOG_DIR, HERE.parent / "live_trader"),
-                                           now=ist_now)).start()
+                                           now=ist_now), blocked_path=STATE_PATH.parent / "blocked_chats.json").start()
 
     # ---- state ----------------------------------------------------------
 
