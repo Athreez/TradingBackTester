@@ -86,6 +86,23 @@ GTT stop-limits vs SL-M over the same period: of 233 stops, 2 filled a minute
 later than SL-M would have; net -532. A 2% buffer costs -2,948, a 10% buffer
 -1,103.
 
+`other_stop_after_sl_pct` (off by default) moves the surviving short's stop to
+that % above its entry once the other side is stopped. Net (max drawdown), 5
+years / INDmoney period:
+
+| Other stop | 5 years | INDmoney |
+|---|---|---|
+| unchanged | +1,64,302 (-29,297) | +1,33,584 (-21,518) |
+| entry | +1,38,041 (-23,718) | +1,20,781 (-27,928) |
+| +5% | +1,37,285 (-26,984) | +1,20,932 (-26,737) |
+| +10% | +1,56,594 (-23,200) | +1,23,893 (-20,956) |
+| +15% | +1,67,314 (-22,279) | +1,30,448 (-20,689) |
+| +20% | +1,52,011 (-25,675) | +1,21,857 (-21,854) |
+
+At entry it caps the second loss on days both stops fire (+1.94 lakh over 5
+years) but stops out recoveries (-2.2 lakh). Only +15% keeps the profit, with a
+lower drawdown, and its neighbours don't, so it is not switched on.
+
 Backtest notes: a stop triggers when a 1-minute candle's high touches the trigger
 and fills at the trigger (or the open, if it gapped through) when that is within
 the limit; otherwise it rests at the limit until the chase replaces it. Expiry weekdays moved

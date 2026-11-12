@@ -84,6 +84,22 @@ def test_exit_side_on_stop_loss(store):
     assert ("sl:PE", "NIFTY25SEP0924000PE") not in fills
 
 
+@pytest.mark.parametrize("pct, pe_stopped", [(0, True), (10, False)])
+def test_other_stop_moves_after_a_stop_loss(store, pct, pe_stopped):
+    """PE short sold at ~90 stays at 90: a stop at entry fires, one 10% above it does not."""
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "on_stop_loss": "exit_side", "other_stop_after_sl_pct": pct})
+    fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
+    short_pe = fills[("short:PE", "NIFTY25SEP0924000PE")].price
+    if pe_stopped:
+        sl = fills[("sl:PE", "NIFTY25SEP0924000PE")]
+        assert sl.ts == datetime.fromisoformat(f"{DAY} 10:31")
+        assert short_pe < 90 and sl.price == pytest.approx(90 * 1.0005)  # already above the trigger: fills at the open
+    else:
+        assert ("exit-time", "NIFTY25SEP0924000PE") in fills
+    assert result.broker.positions() == {} and result.broker.open_orders() == []
+
+
 def test_exit_all_on_stop_loss(store):
     result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
                           overrides={**BASE, "on_stop_loss": "exit_all"})

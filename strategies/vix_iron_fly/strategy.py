@@ -59,6 +59,10 @@ class VixIronFly(Strategy):
         self.chase_after = timedelta(minutes=int(stop.get("chase_after_minutes", 1)))
         if self.on_stop_loss not in ("exit_all", "exit_side"):
             raise ValueError("on_stop_loss must be 'exit_all' or 'exit_side'")
+        # exit_side only: once one short is stopped, move the other short's stop to this % above its
+        # entry price (0 = breakeven; null = leave it where it is).
+        self.other_stop_pct = params.get("other_stop_after_sl_pct")
+        self.short_px: dict[str, float] = {}
         self.schedule: dict[str, dict] = params["schedule"]
         # Trade only when the chosen expiry is at most this many calendar days away (null = any).
         self.max_dte = params.get("max_days_to_expiry")
@@ -123,6 +127,7 @@ class VixIronFly(Strategy):
         self.today = self._pick_underlying(ctx, today)  # (underlying, cfg) or None
         self.hedges: dict[OptionType, Instrument] = {}
         self.lots = 0
+        self.short_px = {}
         self.day_sl_pct = self.sl_pct
         self.day_vix: float | None = None
         self.note = "no expiry data for any underlying" if self.today is None else "waiting for entry time"
@@ -157,13 +162,8 @@ class VixIronFly(Strategy):
     def on_fill(self, ctx: Context, fill: Fill) -> None:
         kind, _, side = fill.tag.partition(":")
         if kind == "short":
-            if self.stop_type == "market":
-                trigger = round(fill.price * (1 + self.day_sl_pct), 2)
-                ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}")
-            else:
-                trigger = _tick(fill.price * (1 + self.day_sl_pct))
-                ctx.stop_buy(fill.instrument, self.lots, trigger, tag=f"sl:{side}",
-                             limit=_tick(trigger * (1 + self.stop_buffer)))
+            self.short_px[side] = fill.price
+            self._place_stop(ctx, fill.instrument, side, fill.price * (1 + self.day_sl_pct))
         elif kind == "sl" and self.state == "OPEN":  # a 2nd SL in the same bar is already handled
             self.note += f"; {side} stop-loss hit at {fill.ts:%H:%M}"
             if self.on_stop_loss == "exit_all":
@@ -172,8 +172,26 @@ class VixIronFly(Strategy):
                 self.state = "DONE"
             else:
                 ctx.sell(self.hedges[OptionType(side)], self.lots, tag=f"hedge-exit:{side}")
+                if self.other_stop_pct is not None:
+                    self._tighten_stop(ctx, "PE" if side == "CE" else "CE")
 
     # ---- helpers --------------------------------------------------------
+
+    def _place_stop(self, ctx: Context, inst: Instrument, side: str, trigger: float) -> None:
+        if self.stop_type == "market":
+            ctx.stop_buy(inst, self.lots, round(trigger, 2), tag=f"sl:{side}")
+        else:
+            trigger = _tick(trigger)
+            ctx.stop_buy(inst, self.lots, trigger, tag=f"sl:{side}", limit=_tick(trigger * (1 + self.stop_buffer)))
+
+    def _tighten_stop(self, ctx: Context, side: str) -> None:
+        """Replace the other short's pending stop with one `other_stop_pct` above its entry price."""
+        for order in ctx.broker.open_orders():
+            if order.tag == f"sl:{side}" and not order.triggered_at and side in self.short_px:
+                trigger = self.short_px[side] * (1 + float(self.other_stop_pct) / 100)
+                ctx.broker.cancel_order(order.id)
+                self._place_stop(ctx, order.instrument, side, trigger)
+                self.note += f"; {side} stop moved to {trigger:.2f}"
 
     def _enter(self, ctx: Context) -> None:
         underlying, cfg = self.today
