@@ -62,6 +62,8 @@ class VixIronFly(Strategy):
         # exit_side only: once one short is stopped, move the other short's stop to this % above its
         # entry price (0 = breakeven; null = leave it where it is).
         self.other_stop_pct = params.get("other_stop_after_sl_pct")
+        # false = naked short straddle (no protective wings): same entry, stops and exit, shorts only.
+        self.use_hedges = bool(params.get("use_hedges", True))
         self.short_px: dict[str, float] = {}
         self.schedule: dict[str, dict] = params["schedule"]
         # Trade only when the chosen expiry is at most this many calendar days away (null = any).
@@ -171,7 +173,8 @@ class VixIronFly(Strategy):
                 ctx.square_off_all(tag="sl-exit")
                 self.state = "DONE"
             else:
-                ctx.sell(self.hedges[OptionType(side)], self.lots, tag=f"hedge-exit:{side}")
+                if OptionType(side) in self.hedges:
+                    ctx.sell(self.hedges[OptionType(side)], self.lots, tag=f"hedge-exit:{side}")
                 if self.other_stop_pct is not None:
                     self._tighten_stop(ctx, "PE" if side == "CE" else "CE")
 
@@ -240,15 +243,15 @@ class VixIronFly(Strategy):
             return
 
         atm = min({i.strike for i in chain}, key=lambda s: abs(s - spot))
-        dist = self._hedge_distance(underlying, cfg, spot)
-        hedge_ce, why_ce = self._pick_hedge(ctx, underlying, cfg, expiry, atm, atm + dist, OptionType.CE)
-        hedge_pe, why_pe = self._pick_hedge(ctx, underlying, cfg, expiry, atm, atm - dist, OptionType.PE)
         legs = {
             "short_ce": ctx.data.find_option(underlying, expiry, atm, OptionType.CE),
             "short_pe": ctx.data.find_option(underlying, expiry, atm, OptionType.PE),
-            "hedge_ce": hedge_ce,
-            "hedge_pe": hedge_pe,
         }
+        why_ce = why_pe = None
+        if self.use_hedges:
+            dist = self._hedge_distance(underlying, cfg, spot)
+            legs["hedge_ce"], why_ce = self._pick_hedge(ctx, underlying, cfg, expiry, atm, atm + dist, OptionType.CE)
+            legs["hedge_pe"], why_pe = self._pick_hedge(ctx, underlying, cfg, expiry, atm, atm - dist, OptionType.PE)
         hedge_notes = "; ".join(w for w in (why_ce, why_pe) if w)
         missing = [k for k, v in legs.items() if v is None]
         if missing:
@@ -260,10 +263,10 @@ class VixIronFly(Strategy):
             log.info("%s %s: %s", self._day, underlying, hedge_notes)
 
         self.lots = int(cfg["lots"])
-        self.hedges = {OptionType.CE: legs["hedge_ce"], OptionType.PE: legs["hedge_pe"]}
+        self.hedges = {OptionType.CE: legs["hedge_ce"], OptionType.PE: legs["hedge_pe"]} if self.use_hedges else {}
         # Hedges first so the shorts get margin benefit when this runs live.
-        ctx.buy(legs["hedge_ce"], self.lots, tag="hedge:CE")
-        ctx.buy(legs["hedge_pe"], self.lots, tag="hedge:PE")
+        for opt, inst in self.hedges.items():
+            ctx.buy(inst, self.lots, tag=f"hedge:{opt.value}")
         ctx.sell(legs["short_ce"], self.lots, tag="short:CE")
         ctx.sell(legs["short_pe"], self.lots, tag="short:PE")
         self.state = "OPEN"
