@@ -130,7 +130,8 @@ class TradeNotifier:
             kind = f.tag.split(":")[0]
             title = {"sl": "🔴 <b>STOP-LOSS</b>", "hedge-exit": "↩️ Hedge exit", "exit-time": "⏹ <b>EXIT 14:45</b>",
                      "sl-exit": "🔴 Exit after stop-loss", "expiry-settlement": "📅 Expiry settlement",
-                     "manual-exit": "🛑 <b>Closed via /exitnow</b>"}.get(kind, f.tag)
+                     "manual-exit": "🛑 <b>Closed via /exitnow</b>", "manual": "✋ <b>Closed by you</b>",
+                     "entry-failed": "⚠️ Closed: entry failed"}.get(kind, f.tag)
             opened = [o for o in all_fills if o.instrument == f.instrument and o.side is not f.side
                       and o.ts.date() == f.ts.date() and o.ts <= f.ts]
             pnl = ""

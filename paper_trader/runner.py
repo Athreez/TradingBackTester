@@ -79,11 +79,6 @@ def _pause(seconds: float) -> None:
     _time.sleep(seconds)
 
 
-def _sleep_until(target: datetime) -> None:
-    while (left := (target - ist_now()).total_seconds()) > 0:
-        _pause(min(left, 60))
-
-
 def _next_session_day(after: date) -> date:
     d = after + timedelta(days=1)
     while d.weekday() >= 5:
@@ -135,6 +130,41 @@ class PaperBot:
         self.tg = Telegram.from_env()  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_IDS in .env, else off
         self.notifier = TradeNotifier(self.tg, muted=lambda: self.controls.get("muted")) if self.tg else None
         self.mirror = None  # live_trader.mirror.OrderMirror for the current day, if on
+        from paper_trader.heartbeat import Heartbeat
+        self.heartbeat = Heartbeat.from_env()  # HEALTHCHECK_URL: healthchecks.io alerts when the pings stop
+
+    def announce_start(self) -> None:
+        """Telegram: say so when the bot comes back after being down during market hours."""
+        if self.notifier is None or not self.snapshot_path.exists():
+            return
+        try:
+            last = datetime.fromisoformat(json.loads(self.snapshot_path.read_text())["updated_at"])
+        except (ValueError, KeyError, OSError):
+            return
+        now = ist_now()
+        down = now - last
+        if (now.weekday() < 5 and time(9, 0) <= now.time() <= time(16, 0) and last.date() == now.date()
+                and down > timedelta(minutes=3)):
+            self.notifier.alert(f"🔁 Bot back online after {down.total_seconds() / 60:.0f} min offline "
+                                f"(last seen {last:%H:%M}). Checking what changed before trading.")
+
+    def _beat(self, problem: str | None = None) -> None:
+        if self.heartbeat:
+            self.heartbeat.beat(problem)
+
+    def _sleep_until(self, target: datetime) -> None:
+        while (left := (target - ist_now()).total_seconds()) > 0:
+            self._beat()
+            _pause(min(left, 60))
+
+    def _data_problem(self, today: date) -> str | None:
+        """Running but blind: candles came in today and then stopped (not flagged on market holidays,
+        when none come at all)."""
+        now = ist_now()
+        if (self.last_bar and self.last_bar.date() == today and now.time() < SESSION_END
+                and now - self.last_bar > timedelta(minutes=5)):
+            return f"no new candles since {self.last_bar:%H:%M}"
+        return None
 
     def start_commands(self) -> None:
         """Answer Telegram commands (/help) from a background thread."""
@@ -211,11 +241,11 @@ class PaperBot:
                 nxt = _next_session_day(today)
                 log.info("Next session %s; sleeping", nxt)
                 self._write_snapshot(None, f"idle until next session {nxt}")
-                _sleep_until(datetime.combine(nxt, PREPARE_AT))
+                self._sleep_until(datetime.combine(nxt, PREPARE_AT))
                 continue
             if ist_now() < datetime.combine(today, PREPARE_AT):
                 self._write_snapshot(None, f"waiting for session start ({PREPARE_AT:%H:%M})")
-            _sleep_until(datetime.combine(today, PREPARE_AT))
+            self._sleep_until(datetime.combine(today, PREPARE_AT))
             self._run_day(today)
             if once:
                 return
@@ -240,6 +270,7 @@ class PaperBot:
                     return
                 log.warning("loading contracts failed (%s); retrying in 30s", e)
                 self._write_snapshot(None, f"loading contracts failed, retrying: {e}")
+                self._beat(f"loading contracts failed: {e}")
                 _pause(30)
         data = HistoricalMarketData(store, self.interval)
         self.broker._quote = lambda inst: data.bar_at(inst, data.now())
@@ -249,6 +280,7 @@ class PaperBot:
         self._start_broker_day(feed, data, today)
 
         while ist_now() < datetime.combine(today, CLOSE_AT):
+            self._beat(self._data_problem(today))
             self._apply_controls(ctx, feed, today)
             now = ist_now()
             symbols = sorted({i.symbol for i in self.broker.positions()}
@@ -259,11 +291,13 @@ class PaperBot:
             except LoginConflict as e:  # someone else holds the login: don't fight over tokens
                 log.error("%s", e)
                 self._write_snapshot(data, f"login problem: {e}")
+                self._beat(f"INDmoney login problem: {e}")
                 _pause(LOGIN_BACKOFF_SECONDS)
                 continue
             except AuthError as e:  # e.g. token generation throttled: wait instead of hammering
                 log.warning("login failed, retrying in %ss: %s", AUTH_BACKOFF_SECONDS, e)
                 self._write_snapshot(data, f"login problem: {e}")
+                self._beat(f"INDmoney login problem: {e}")
                 _pause(AUTH_BACKOFF_SECONDS)
                 continue
             except Exception as e:  # network hiccup: keep the bot alive, retry next poll
@@ -513,6 +547,7 @@ def main() -> None:
     lock = _single_instance_lock()  # noqa: F841 (held until exit)
     bot = PaperBot(name, capital)
     bot.start_commands()
+    bot.announce_start()
     bot.run(once=args.once)
 
 

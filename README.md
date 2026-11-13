@@ -122,6 +122,23 @@ How orders are handled:
 - Refused outright: orders above `LIVE_MAX_LOTS`, entries from bars replayed after a late start, entries
   beyond `LIVE_MAX_ENTRY_ORDERS` a day (4: the fly's legs; stops, exits and retries don't count). At day end every open order, GTTs included, is cancelled.
 
+**If the bot goes offline.** The GTT stop-losses stay live on INDmoney, and orders use the intraday
+product, which brokers normally square off themselves near the close (check INDmoney's cut-off time). To be told: set `HEALTHCHECK_URL` to a
+[healthchecks.io](https://healthchecks.io) check (schedule cron `* 9-15 * * 1-5`, time zone Asia/Kolkata,
+grace 3 min, Telegram integration). The bot pings it every minute; no ping for 3 minutes on a weekday
+09:00-16:00 (PC off, crash, hang, internet down) raises the alarm, and so does a running bot whose
+candles stopped mid-session. Both bots do this.
+
+**When it comes back** it says how long it was gone, then reads INDmoney before trading:
+- stops that fired meanwhile are booked and the strategy carries on (e.g. that side's hedge is sold);
+- a leg you closed in the app is booked at INDmoney's average price and its stop-loss cancelled (resized
+  if you closed part), so a leftover GTT can never open a new position; the other legs carry on;
+- a stop-loss you cancelled is not put back (that leg then has none; it still exits at the exit time);
+- an entry order you cancelled abandons the entry (what filled is closed);
+- a position the bot didn't open is never touched, and after a restart it means no new entry that day.
+Then a Telegram message lists the open legs, the stop-losses, any leg without one, and what comes next.
+The same rules apply while it runs (a difference must show twice in a row, as the order book can lag).
+
 No webhooks: INDmoney has no order webhook, and the bot polls `/order-book` every 5 s instead (its order
 WebSocket would be faster but needs a second always-open connection).
 

@@ -8,7 +8,7 @@ import requests
 from backtester.engine import run_bar
 from backtester.historical_data import HistoricalMarketData
 from core.costs import CostModel
-from core.models import Exchange, Instrument, Order, OrderStatus, OrderType, Side
+from core.models import Exchange, Instrument, OptionType, Order, OrderStatus, OrderType, Side
 from core.registry import load_strategy
 from core.strategy_base import Context
 from data.indmoney_client import IndMoneyError
@@ -110,8 +110,8 @@ class FakeIndMoney:
         return [b for k, b in self.calls if k != "cancel" and (kind is None or k == kind)]
 
 
-INST = Instrument("NIFTY25SEP0924000CE", Exchange.NFO, "NIFTY", 75, date(2025, 9, 9), 24000.0)
-HEDGE = Instrument("NIFTY25SEP0924400CE", Exchange.NFO, "NIFTY", 75, date(2025, 9, 9), 24400.0)
+INST = Instrument("NIFTY25SEP0924000CE", Exchange.NFO, "NIFTY", 75, date(2025, 9, 9), 24000.0, OptionType.CE)
+HEDGE = Instrument("NIFTY25SEP0924400CE", Exchange.NFO, "NIFTY", 75, date(2025, 9, 9), 24400.0, OptionType.CE)
 
 
 @pytest.fixture
@@ -277,13 +277,91 @@ def test_unexplained_difference_halts_new_entries(setup):
     b, fake, clock = setup
     b.place_order(order(INST, Side.SELL, tag="short:CE"))
     b.send_pending()
-    fake.rows["DRV-1"]["traded_qty"] = 150  # INDmoney shows more than we ever sent
-    fake.rows["DRV-1"]["hidden"] = True
+    tick(b, clock)
+    fake.rows["DRV-1"]["traded_qty"] = 150  # INDmoney now shows more than the bot ever sold
     for _ in range(4):
         tick(b, clock, 31)
     assert "positions differ" in b.halted
     assert b.place_order(order(HEDGE, Side.BUY, tag="hedge:CE")).status is OrderStatus.REJECTED
     assert any("positions differ" in a for a in b.alerts)
+
+
+def _short_with_stop(b, fake, clock):
+    b.place_order(order(INST, Side.SELL, tag="short:CE"))
+    b.send_pending()
+    tick(b, clock)
+    stop = b.place_order(order(INST, Side.BUY, tag="sl:CE", order_type=OrderType.STOP_LIMIT,
+                               trigger_price=130, limit_price=136.5))
+    b.send_pending()
+    tick(b, clock)
+    return stop
+
+
+def close_by_hand(fake, qty, price):
+    fake._n += 1
+    rid = f"DRV-{fake._n}"
+    fake.rows[rid] = {"id": rid, "status": "SUCCESS", "traded_qty": qty, "traded_price": f"{price:.2f}",
+                      "requested_qty": qty, "remarks": None, "txn_type": "BUY", "security_id": "1", "extra_info": ""}
+
+
+def test_leg_you_closed_by_hand_is_booked_and_its_stop_cancelled(setup):
+    b, fake, clock = setup
+    stop = _short_with_stop(b, fake, clock)
+    close_by_hand(fake, 75, 90.0)  # you bought it back in the app; the GTT is still waiting
+    tick(b, clock, 31)  # seen once: could be order-book lag
+    tick(b, clock, 31)  # seen twice: booked as yours, stop cancel requested
+    tick(b, clock)  # cancel confirmed
+    assert b.positions() == {} and b.fills()[-1].tag == "manual:CE" and b.fills()[-1].price == 90.0
+    assert fake.rows["GTT-2"]["status"] == "CANCELLED" and stop.status is OrderStatus.CANCELLED
+    assert b.halted is None and any("You closed 75" in a for a in b.alerts)
+
+
+def test_part_closed_by_hand_resizes_the_stop(setup):
+    b, fake, clock = setup
+    b.place_order(order(INST, Side.SELL, qty=75, tag="short:CE"))
+    b.send_pending()
+    tick(b, clock)
+    b.place_order(order(INST, Side.BUY, tag="sl:CE", order_type=OrderType.STOP, trigger_price=130))
+    b.send_pending()
+    close_by_hand(fake, 25, 95.0)
+    tick(b, clock, 31)
+    tick(b, clock, 31)
+    tick(b, clock)
+    assert b.positions()[INST].quantity == -50
+    assert [(g["qty"], g["trigger_price"]) for g in fake.sent("gtt")] == [(75, 130.0), (50, 130.0)]
+
+
+def test_stop_you_cancelled_is_not_put_back(setup):
+    b, fake, clock = setup
+    stop = _short_with_stop(b, fake, clock)
+    fake.rows["GTT-2"]["status"] = "CANCELLED"  # you cancelled it in the app
+    tick(b, clock, 31)
+    tick(b, clock, 31)
+    assert stop.status is OrderStatus.CANCELLED and len(fake.sent()) == 2  # nothing re-sent
+    assert b.positions()[INST].quantity == -75 and b.halted is None
+    assert any("NO stop-loss" in a for a in b.alerts)
+
+
+def test_entry_order_you_cancelled_abandons_the_entry(setup):
+    b, fake, clock = setup
+    fake.fill_market = False
+    b.place_order(order(HEDGE, Side.BUY, tag="hedge:CE"))
+    short = b.place_order(order(INST, Side.SELL, tag="short:CE"))
+    b.send_pending()
+    fake.rows["DRV-1"]["status"] = "CANCELLED"
+    tick(b, clock)
+    assert "cancelled outside the bot" in b.entry_failed and short.status is OrderStatus.REJECTED
+    assert len(fake.sent()) == 1
+
+
+def test_restart_finds_an_unknown_position_and_takes_no_new_entry(setup):
+    b, fake, clock = setup
+    close_by_hand(fake, 75, 90.0)  # e.g. the bot's state was lost, but INDmoney holds a position
+    b.start_day(T0.date())  # what a restart does
+    b.poll()
+    assert "doesn't know" in b.halted
+    assert b.place_order(order(HEDGE, Side.BUY, tag="hedge:CE")).status is OrderStatus.REJECTED
+    assert len(fake.sent()) == 0  # and it never touches that position
 
 
 def test_refusals(setup):

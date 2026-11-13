@@ -42,6 +42,7 @@ log = logging.getLogger("live")
 
 TERMINAL = {"SUCCESS", "FAILED", "ABORTED", "CANCELLED", "EXPIRED",
             "PARTIALLY FILLED - CANCELLED", "PARTIALLY FILLED - EXPIRED"}
+WAITING = {"CREATED", "PENDING", "SL-PENDING", "QUEUED", "O-PENDING", "INITIATED", "PROCESSING", "MODIFIED"}
 STOPS = (OrderType.STOP, OrderType.STOP_LIMIT)
 UNKNOWN_GRACE = timedelta(seconds=30)  # how long an unanswered order may take to show up in the order book
 MAX_ATTEMPTS = 3
@@ -94,6 +95,8 @@ class LiveBroker(SimBroker):
         self._undelivered: list[Fill] = []
         self._mismatch: dict[str, int] = {}
         self._last_reconcile: datetime | None = None
+        self._startup = True  # the first positions check after a (re)start acts at once
+        self._ignored: set[str] = set()  # securities the bot didn't open (already reported)
         self.alerts: list[str] = []  # drained by the runner into Telegram
         self.halted: str | None = None  # no new entries today (closing orders still go out)
         self.entry_failed: str | None = None  # an opening order failed: the runner flattens and stops for the day
@@ -111,7 +114,9 @@ class LiveBroker(SimBroker):
         if self.day != day:
             self.day, self.entries_today, self.halted, self.entry_failed = day, 0, None, None
             self._mismatch.clear()
+            self._ignored = set()
         self.accept_opening = True
+        self._startup, self._last_reconcile = True, None  # check INDmoney's positions straight away
         for s in self.sent.values():  # GTTs live for a year on INDmoney: nothing from an earlier day stays
             if not s.done and s.sent_at.date() != day:
                 self._cancel_sent(s)
@@ -395,8 +400,13 @@ class LiveBroker(SimBroker):
             self._finish(order, s, OrderStatus.FILLED)
         elif rows and all(self._row_done(r) for r in rows):
             reason = "; ".join(str(r.get("extra_info")) for r in rows if r.get("extra_info"))
-            self._finish(order, s, OrderStatus.CANCELLED if s.cancel_requested else OrderStatus.REJECTED,
-                         reason or ", ".join(f"{r.get('id')} {r.get('status')}" for r in rows))
+            reason = reason or ", ".join(f"{r.get('id')} {r.get('status')}" for r in rows)
+            if s.cancel_requested:
+                self._finish(order, s, OrderStatus.CANCELLED, reason)
+            elif any(r.get("status") == "CANCELLED" for r in rows):  # not by us: you, in the INDmoney app
+                self._finish(order, s, OrderStatus.CANCELLED, reason, by_you=True)
+            else:
+                self._finish(order, s, OrderStatus.REJECTED, reason)
 
     @staticmethod
     def _row_done(r: dict) -> bool:
@@ -404,7 +414,7 @@ class LiveBroker(SimBroker):
         # A triggered GTT can read SUCCESS before its order has traded: not done until something trades.
         return status in TERMINAL and not (status == "SUCCESS" and (_num(r.get("traded_qty")) or 0) == 0)
 
-    def _finish(self, order: Order, s: Sent, status: OrderStatus, reason: str = "") -> None:
+    def _finish(self, order: Order, s: Sent, status: OrderStatus, reason: str = "", by_you: bool = False) -> None:
         s.done = True
         self._pending.pop(order.id, None)
         if s.filled > 0:
@@ -417,6 +427,18 @@ class LiveBroker(SimBroker):
         order.status = status
         left = order.quantity - s.filled
         inst = order.instrument
+        if by_you:  # your decision: never sent again
+            msg = f"{order.tag} {inst.symbol} was cancelled outside the bot (INDmoney app?)"
+            if s.opening:
+                self.entry_failed = self.entry_failed or msg
+                msg += "; entry abandoned, closing what filled"
+            elif order.order_type in STOPS:
+                msg += ("; that leg has NO stop-loss now and the bot won't put one back. It still closes it at "
+                        "the exit time; /exitnow closes everything now")
+            else:
+                msg += "; the bot won't send it again"
+            self._alert(msg)
+            return
         if s.resend or (status is OrderStatus.REJECTED and not s.opening):
             if s.attempt >= MAX_ATTEMPTS:
                 if s.opening:
@@ -463,32 +485,84 @@ class LiveBroker(SimBroker):
             sid = _sid(r.get("security_id"))
             theirs[sid] = int(_num(r.get("net_qty")) or 0)
             avg[sid] = {Side.BUY: _avg(r, "day_buy"), Side.SELL: _avg(r, "day_sell")}
+        insts = {self._sid(i): i for i in self._positions}
         ours = {self._sid(i): p.quantity for i, p in self.positions().items()}
         diffs = {sid for sid in set(ours) | set(theirs) if ours.get(sid, 0) != theirs.get(sid, 0)}
         for sid in list(self._mismatch):
             if sid not in diffs:
                 del self._mismatch[sid]
+        # Right after a (re)start the order book was just read, so a difference is real at once; while running,
+        # act on one seen twice in a row (the order book can lag the positions by a poll).
+        startup, self._startup = self._startup, False
         for sid in diffs:
-            gap = theirs.get(sid, 0) - ours.get(sid, 0)
-            seen = self._mismatch.get(sid, 0)
-            for s in self.working():
-                order = self._by_id[s.order_id]
-                left = s.qty - s.filled
-                if self._sid(order.instrument) == sid and (left if order.side is Side.BUY else -left) == gap and seen >= 1:
-                    price = avg.get(sid, {}).get(order.side) or s.avg_price or order.trigger_price or 0.0
-                    log.warning("LIVE %s %s: INDmoney positions show it executed (order book doesn't); booked at %.2f",
-                                order.tag, order.instrument.symbol, price)
-                    s.filled, s.avg_price = s.qty, price
-                    self._finish(order, s, OrderStatus.FILLED)
-                    break
-            else:
-                self._mismatch[sid] = seen + 1
-                if seen + 1 >= self.mismatch_checks and not self.halted:
-                    self.halted = (f"positions differ from INDmoney (security {sid}: bot {ours.get(sid, 0)}, "
-                                   f"INDmoney {theirs.get(sid, 0)})")
-                    self._alert(f"{self.halted}. No new entries. Check the INDmoney app; close by hand if needed.")
+            mine, now_qty = ours.get(sid, 0), theirs.get(sid, 0)
+            gap, seen = now_qty - mine, self._mismatch.get(sid, 0)
+            if not (startup or seen >= 1):
+                self._mismatch[sid] = 1
                 continue
             self._mismatch.pop(sid, None)
+            # 1. one of our working orders explains it exactly: it executed (e.g. a fired GTT the order book
+            #    doesn't show). Unless it is a stop still waiting for its trigger: then you closed the leg.
+            s = next((s for s in self.working() if self._sid(self._by_id[s.order_id].instrument) == sid
+                      and (s.qty - s.filled) * (1 if self._by_id[s.order_id].side is Side.BUY else -1) == gap), None)
+            if s and not self._untriggered(s):
+                order = self._by_id[s.order_id]
+                price = avg.get(sid, {}).get(order.side) or s.avg_price or order.trigger_price or 0.0
+                log.warning("LIVE %s %s: INDmoney positions show it executed (order book doesn't); booked at %.2f",
+                            order.tag, order.instrument.symbol, price)
+                s.filled, s.avg_price = s.qty, price
+                self._finish(order, s, OrderStatus.FILLED)
+            # 2. you closed (part of) a leg of ours by hand
+            elif mine and (now_qty == 0 or (now_qty * mine > 0 and abs(now_qty) < abs(mine))):
+                self._closed_by_you(insts[sid], abs(mine) - abs(now_qty), avg.get(sid, {}))
+            # 3. a position the bot never opened: never touched. After a restart it may be the bot's own trade
+            #    from a lost state, so no new entries today (no second fly on top).
+            elif mine == 0:
+                if sid not in self._ignored:
+                    self._ignored.add(sid)
+                    if startup:
+                        self.halted = f"INDmoney shows a position the bot doesn't know (security {sid}, qty {now_qty})"
+                        self._alert(f"{self.halted}. No new entries today; the bot won't touch it. Close it in the "
+                                    "app if it shouldn't be there.")
+                    else:
+                        self._alert(f"Position in security {sid} (qty {now_qty}) wasn't opened by the bot; ignoring it.")
+            # 4. more than we hold, or flipped: can't be explained, stop new entries
+            else:
+                self._mismatch[sid] = seen + 1
+                if (startup or seen + 1 >= self.mismatch_checks) and not self.halted:
+                    self.halted = f"positions differ from INDmoney (security {sid}: bot {mine}, INDmoney {now_qty})"
+                    self._alert(f"{self.halted}. No new entries. Check the INDmoney app; close by hand if needed.")
+
+    @staticmethod
+    def _untriggered(s: Sent) -> bool:
+        """A GTT INDmoney still lists as waiting for its trigger (so it can't have executed)."""
+        return s.kind == "gtt" and bool(s.statuses) and all(st in WAITING for st in s.statuses.values())
+
+    def _closed_by_you(self, inst: Instrument, qty: int, prices: dict) -> None:
+        """Book a manual close at INDmoney's average price, and fix the leg's stop-loss: cancelled if the leg
+        is gone (a GTT left behind would open a new position when it fires), resized if part is left."""
+        pos = self._positions[inst]
+        side = Side.BUY if pos.quantity < 0 else Side.SELL
+        price = prices.get(side) or pos.avg_price
+        kind = f"manual:{inst.option_type.value}" if inst.option_type else "manual"
+        done = Order(inst, side, qty, tag=kind, status=OrderStatus.FILLED, created_at=self.now())
+        self._by_id[done.id], self._opening[done.id] = done, False
+        self._orders.append(done)
+        self._undelivered.append(self._record_fill(done, price, self.now()))
+        left = abs(self._positions[inst].quantity)
+        for oid in list(self._outbox):  # queued closing orders were sized for the old position
+            if self._by_id[oid].instrument == inst and not self._opening[oid]:
+                self.cancel_order(oid)
+        for s in self.working():
+            stop = self._by_id[s.order_id]
+            if stop.instrument == inst and not s.opening and not s.cancel_requested:
+                self._cancel_sent(s)
+                if left and stop.order_type in STOPS:  # goes out once the cancel is confirmed
+                    self.place_order(Order(inst, stop.side, left, stop.order_type, stop.limit_price,
+                                           stop.trigger_price, tag=stop.tag, created_at=self.now()))
+        self._alert(f"You closed {qty} {inst.symbol} outside the bot; booked at {price:.2f}. "
+                    + (f"Its stop-loss now covers the {left} left." if left else "Its stop-loss is cancelled.")
+                    + " The bot keeps managing the other legs.")
 
     def _sid(self, inst: Instrument) -> str:
         return _sid((self.codes.get(inst.symbol) or "_").split("_", 1)[1])

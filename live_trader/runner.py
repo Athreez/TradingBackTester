@@ -68,10 +68,34 @@ class LiveBot(PaperBot):
     # ---- broker hooks ---------------------------------------------------
 
     def _start_broker_day(self, feed, data, today: date) -> None:
+        """Before anything is traded: read INDmoney's orders and positions, book what happened while the bot
+        was away (stops that fired, legs you closed, orders you cancelled), and say what it will do next."""
         self.broker.attach(self.client, feed._symbol_to_code, ist_now)
         self.broker.start_day(today)
-        self.broker.reconcile()
+        self.broker.poll()  # order book first, then the positions check (acts at once after a start)
         self._drain_alerts()
+        now = ist_now().time()
+        if self.notifier and paper.SESSION_START <= now < paper.SESSION_END:  # a restart during the session
+            self.notifier.alert(self._state_report())
+
+    def _state_report(self) -> str:
+        b, s = self.broker, self.strategy
+        legs = ", ".join(f"{i.symbol} {p.quantity:+d}" for i, p in b.positions().items()) or "none"
+        stops = ", ".join(f"{o.instrument.symbol} @ {o.trigger_price:.2f}" for o in b.open_orders()
+                          if o.trigger_price is not None) or "none"
+        bare = [i.symbol for i, p in b.positions().items() if p.quantity < 0 and not any(
+            o.instrument == i and o.trigger_price is not None for o in b.open_orders())]
+        state = getattr(s, "state", "IDLE")
+        if b.halted:
+            nxt = f"no new entries today ({b.halted})"
+        elif state == "OPEN" or b.positions():
+            nxt = f"managing the open legs, exit at {s.exit_time:%H:%M}"
+        elif state == "DONE":
+            nxt = "done for today"
+        else:
+            nxt = f"entry at {s.entry_time:%H:%M} if VIX allows (not if that time has passed)"
+        return (f"Checked INDmoney. Open legs: {legs}. Stop-losses: {stops}."
+                + (f" ⚠️ No stop-loss on: {', '.join(bare)}." if bare else "") + f" Next: {nxt}.")
 
     def _before_bar(self, live: bool) -> None:
         self.broker.accept_opening = live  # never open positions from bars replayed after a late start
@@ -80,6 +104,11 @@ class LiveBot(PaperBot):
         """Every poll and after every bar: read INDmoney, hand fills to the strategy, send what is queued."""
         b = self.broker
         b.poll()
+        if ctx.data._now is None:  # no bar yet (just restarted): fills wait for the first bar, which hands
+            b.send_pending()       # them to the strategy through run_bar with the clock set
+            self._drain_alerts()
+            self._save()
+            return
         for fill in b.take_fills():
             self.strategy.on_fill(ctx, fill)
         if b.entry_failed:
@@ -146,6 +175,7 @@ def main() -> None:
     lock = paper._single_instance_lock()  # noqa: F841 (same lock as the paper bot: one INDmoney login)
     bot = LiveBot(name, capital)
     bot.start_commands()
+    bot.announce_start()
     if bot.notifier:
         bot.notifier.alert(f"LIVE bot started ({name}, max {bot.broker.max_lots} lot per order). Real money.")
     bot.run(once=args.once)
