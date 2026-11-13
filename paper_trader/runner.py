@@ -54,7 +54,8 @@ log = logging.getLogger("paper")
 
 
 def _single_instance_lock():
-    """Exit if another paper bot is already running (two bots would overwrite each other's state)."""
+    """Exit if a bot is already running. Paper and live share this lock: two bots would overwrite each other's
+    state, or fight over the one INDmoney login."""
     lock_path = STATE_PATH.parent / "bot.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     f = open(lock_path, "a+")
@@ -67,7 +68,8 @@ def _single_instance_lock():
             import fcntl
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        raise SystemExit("Another paper bot is already running (paper_trader/state/bot.lock).")
+        raise SystemExit("A trading bot (paper or live) is already running; only one can run at a time "
+                         "(paper_trader/state/bot.lock). Close its window first, then start this one again.")
     return f  # keep the handle open for the life of the process
 
 
@@ -181,6 +183,7 @@ class PaperBot:
         return STATE_PATH, SNAPSHOT_PATH, LOG_DIR
 
     def _new_broker(self) -> SimBroker:
+        log.info("New paper account: capital %.0f, strategy %s", self.capital, self.strategy_name)
         return SimBroker(lambda i: None, self.costs, self.capital)
 
     def _broker_class(self) -> type:
@@ -209,8 +212,7 @@ class PaperBot:
 
     def _restore(self) -> None:
         if not self.state_path.exists():
-            self.broker = self._new_broker()
-            log.info("New paper account: capital %.0f, strategy %s", self.capital, self.strategy_name)
+            self.broker = self._new_broker()  # logs "New paper account" / "New LIVE account record"
             return
         state = pickle.loads(self.state_path.read_bytes())
         if state["strategy_name"] != self.strategy_name:

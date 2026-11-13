@@ -2,7 +2,8 @@
 
 Run:  streamlit run paper_trader/dashboard.py      (opens http://localhost:8501)
 
-The sidebar switches between the paper bot (paper_trader/), the live bot (live_trader/) and a simulation
+A toggle at the top right switches between the paper bot (paper_trader/) and the live bot (live_trader/);
+the sidebar shows a simulation instead, when one exists
 (paper_trader/sim/). Each view reads that bot's state/live.json (written every poll) and the CSV
 journals in its logs/ folder.
 """
@@ -209,11 +210,22 @@ st.set_page_config(page_title="Trading Bot", page_icon="📈", layout="wide")
 
 # Paper account, live (real money) account, or a replay written by `python -m paper_trader.simulate`.
 SIM_DIR = HERE / "sim"
-VIEWS = ["Paper", "💰 Live"] + (["Simulation"] if (SIM_DIR / "state" / "live.json").exists() else [])
-view = st.sidebar.radio("Bot", VIEWS, help="Paper = the paper bot (simulated fills). Live = the real-money bot "
-                        "(INDmoney orders). Simulation = past sessions replayed through the bot's engine "
-                        "(python -m paper_trader.simulate --from ... --to ...).")
-SIMULATION, LIVE = view == "Simulation", view == "💰 Live"
+
+# Paper / Live switch, top right under Streamlit's Deploy button, with the current mode shown above it.
+# Kept in the URL (?view=live) so a refresh or a bookmark opens the same view.
+_, switch = st.columns([10, 1])
+with switch:
+    mode_label = st.empty()
+    LIVE = st.toggle("Live", value=st.query_params.get("view") == "live", key="live_view",
+                     help="Off = the paper bot (simulated fills). On = the real-money bot (INDmoney orders).")
+    mode_label.markdown(f"<div style='text-align:center;font-weight:600;white-space:nowrap'>"
+                        f"{'💰 Live' if LIVE else '📝 Paper'}</div>", unsafe_allow_html=True)
+st.query_params["view"] = "live" if LIVE else "paper"
+# Past sessions replayed with `python -m paper_trader.simulate --from ... --to ...` (only when one exists).
+SIMULATION = (SIM_DIR / "state" / "live.json").exists() and st.sidebar.toggle(
+    "🧪 Show simulation", help="Past sessions replayed through the bot's engine, instead of the bot above.")
+if SIMULATION:
+    LIVE = False
 if SIMULATION:
     LOG_DIR, STATE_DIR = SIM_DIR / "logs", SIM_DIR / "state"
 elif LIVE:
