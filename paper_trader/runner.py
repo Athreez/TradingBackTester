@@ -278,6 +278,9 @@ class PaperBot:
         session_open = datetime.combine(today, SESSION_START)
         self.mirror = self._make_mirror(feed, today)
         self._start_broker_day(feed, data, today)
+        if self.controls.exit_requested.is_set():  # asked before this session: not meant for today
+            self.controls.exit_requested.clear()
+            log.warning("dropped an /exitnow request made before the session")
 
         while ist_now() < datetime.combine(today, CLOSE_AT):
             self._beat(self._data_problem(today))

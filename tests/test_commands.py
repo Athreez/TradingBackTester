@@ -134,8 +134,12 @@ def test_only_answers_whitelisted_chats_and_fresh_messages(setup, caplog, tmp_pa
     started = 1_800_000_000
     bot.process({"message": {"chat": {"id": 111, "first_name": "Stranger"}, "date": started, "text": "/status"}}, started)
     bot.process({"message": {"chat": {"id": 111}, "date": started, "text": "/pnl"}}, started)
+    assert tg.sent == []  # strangers get no reply
     bot.process({"message": {"chat": {"id": 1000000001}, "date": started - 3600, "text": "/exitnow"}}, started)
-    assert tg.sent == []
+    bot.process({"message": {"chat": {"id": 1000000001}, "date": started - 3500, "text": "hello"}}, started)
+    assert len(tg.sent) == 1 and "Not done" in tg.sent[0][1] and "/exitnow" in tg.sent[0][1]  # sent while offline
+    assert not h.controls.exit_requested.is_set() and h._exit_asked == {}
+    tg.sent.clear()
     assert [r.getMessage() for r in caplog.records].count(
         "ignored Telegram message from chat 111 (Stranger): not in TELEGRAM_CHAT_IDS") == 1  # logged once
     assert json.loads((tmp_path / "blocked_chats.json").read_text())["111"]["name"] == "Stranger"
@@ -209,3 +213,23 @@ def test_runner_applies_controls_without_logging_in(setup, tmp_path):
     bot.mirror.halted = "INDmoney reports Rs 5,000 available"  # a safety stop is never undone by /mirror on
     bot._apply_controls(ctx, None, date(2026, 11, 12))
     assert bot.mirror.halted.startswith("INDmoney reports")
+
+
+def test_yes_window_uses_the_times_you_sent_them(setup):
+    """Both read at once after a restart: what counts is the gap between your two messages."""
+    h, controls, _, clock = setup
+    h.handle("/exitnow", chat="1", sent_at=NOW - timedelta(seconds=200))
+    assert "Nothing to confirm" in h.handle("YES", chat="1", sent_at=NOW - timedelta(seconds=100))
+    h.handle("/exitnow", chat="1", sent_at=NOW - timedelta(seconds=200))
+    assert "Closing everything" in h.handle("YES", chat="1", sent_at=NOW - timedelta(seconds=170))
+    assert controls.exit_requested.is_set()
+
+
+def test_exitnow_at_night_with_nothing_open_does_nothing(setup):
+    h, controls, paths, _ = setup
+    snap = json.loads(paths.snapshot.read_text())
+    snap.update(phase="idle until next session 2026-11-13", positions=[], open_orders=[])
+    paths.snapshot.write_text(json.dumps(snap))
+    assert "nothing to close" in h.handle("/exitnow")
+    assert "Nothing to confirm" in h.handle("YES")
+    assert not controls.exit_requested.is_set()

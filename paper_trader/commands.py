@@ -18,7 +18,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 log = logging.getLogger("commands")
@@ -40,6 +40,7 @@ COMMANDS = [
     ("help", "this list"),
 ]
 CONFIRM_SECONDS = 60
+IST = timezone(timedelta(hours=5, minutes=30))
 STALE_UPDATE_SECONDS = 300  # commands older than this when the bot starts are ignored (no stale /exitnow)
 
 
@@ -88,8 +89,11 @@ class CommandHandler:
         self._exit_asked: dict[str, datetime] = {}  # chat -> when it sent /exitnow (YES must come from that chat)
         self._chat = ""
 
-    def handle(self, text: str, chat: str | int = "") -> str:
+    def handle(self, text: str, chat: str | int = "", sent_at: datetime | None = None) -> str:
+        """`sent_at`: when Telegram says the message was sent (naive IST), so the /exitnow -> YES window is
+        measured between your two messages, not between when the bot happened to read them."""
         self._chat = str(chat)
+        self._sent_at = sent_at or self.now()
         parts = text.strip().split()
         if not parts:
             return ""
@@ -261,14 +265,23 @@ class CommandHandler:
         self.controls.set("paused", False)
         return "▶️ Entries allowed again (a day already skipped while paused stays skipped)."
 
+    def _nothing_to_close(self) -> bool:
+        """No session running and nothing open: an exit would only make the bot skip the next day."""
+        s = self._snap()
+        return bool(s) and s.get("phase") != "trading session" and not s.get("positions") and not s.get("open_orders")
+
     def cmd_exitnow(self, _="") -> str:
-        self._exit_asked[self._chat] = self.now()
+        if self._nothing_to_close():
+            return "Nothing is open and no session is running: nothing to close. To skip a day, use /pause."
+        self._exit_asked[self._chat] = self._sent_at
         return f"🛑 Close ALL open positions at market now? Reply <b>YES</b> within {CONFIRM_SECONDS}s."
 
     def _confirm_exit(self) -> str:
         asked = self._exit_asked.pop(self._chat, None)
-        if asked is None or (self.now() - asked).total_seconds() > CONFIRM_SECONDS:
+        if asked is None or (self._sent_at - asked).total_seconds() > CONFIRM_SECONDS:
             return "Nothing to confirm (send /exitnow first)."
+        if self._nothing_to_close():
+            return "Nothing is open and no session is running: nothing to close. To skip a day, use /pause."
         self.controls.exit_requested.set()
         return "🛑 Closing everything on the next bar; you'll get the exit messages."
 
@@ -332,9 +345,15 @@ class CommandBot:
                 log.warning("ignored Telegram message from chat %s (%s): not in TELEGRAM_CHAT_IDS", chat_id, who)
                 self._record_blocked(chat_id, who, msg.get("date", 0))
             return
-        if msg.get("date", 0) < started - STALE_UPDATE_SECONDS:
-            return  # sent long before the bot started: don't act on it now
-        reply = self.handler.handle(msg.get("text") or "", chat=chat_id)
+        text = (msg.get("text") or "").strip()
+        sent_at = datetime.fromtimestamp(msg.get("date", 0), IST).replace(tzinfo=None)
+        if msg.get("date", 0) < started - STALE_UPDATE_SECONDS:  # sent long before the bot started: not acted on
+            if text.startswith("/") or text.upper() == "YES":  # but say so, or you'd think it was done
+                when = f"{sent_at:%H:%M}" if sent_at.date() == datetime.now(IST).date() else f"{sent_at:%d %b %H:%M}"
+                self.tg.send(f"⏭ Not done: <code>{html.escape(text[:50])}</code> was sent at {when} while I was "
+                             "offline. Send it again if you still want it.", chat_id=chat_id)
+            return
+        reply = self.handler.handle(text, chat=chat_id, sent_at=sent_at)
         if reply:
             self.tg.send(reply, chat_id=chat_id)  # answer only the chat that asked
 

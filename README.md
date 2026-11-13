@@ -71,7 +71,8 @@ going to the chat that asked (`/help` lists them):
 `/status`, `/today`, `/pnl`, `/history 10`, `/live`, `/health`, `/log 20`, and
 the switches `/pause` / `/resume` (skip new entries), `/exitnow` (close
 everything, after a YES), `/mirror on|off` and `/mute` / `/unmute` (alerts always
-come through). Switches are kept in `paper_trader/state/controls.json`. Only one
+come through). Switches are kept in `paper_trader/state/controls.json`. A command sent more than 5
+minutes before the bot (re)started is not acted on; the bot replies "Not done" so you can send it again. Only one
 program can read the bot's messages, so `notify chat-id` gets nothing while the
 bot is running.
 
