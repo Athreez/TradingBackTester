@@ -453,3 +453,34 @@ def test_only_four_entry_orders_a_day(setup):
     b.send_pending()
     tick(b, clock)
     assert b.positions()[HEDGE].quantity == 225  # 4 bought, 1 lot sold back
+
+
+def test_in_flight_only_while_something_is_about_to_change(setup):
+    b, fake, clock = setup
+    fake.fill_market = False
+    assert not b.in_flight()
+    b.place_order(order(INST, Side.SELL, tag="short:CE"))
+    assert b.in_flight()  # queued
+    b.send_pending()
+    assert b.in_flight()  # market order working
+    fake._trade("DRV-1", 100.0)
+    tick(b, clock)
+    stop = b.place_order(order(INST, Side.BUY, tag="sl:CE", order_type=OrderType.STOP, trigger_price=130))
+    b.send_pending()
+    assert not b.in_flight()  # a GTT resting at its trigger: normal 5 s polling is enough
+    stop.triggered_at = clock["now"]
+    assert b.in_flight()  # its trigger traded: watch closely
+
+
+def test_live_bot_follows_orders_every_second_between_polls(monkeypatch):
+    import live_trader.runner as live
+    bot = live.LiveBot.__new__(live.LiveBot)
+    flight = iter([True, True, False, False, False])
+    bot.broker = type("B", (), {"in_flight": lambda self: next(flight)})()
+    synced, slept = [], []
+    bot._sync_broker = lambda ctx: synced.append(1)
+    t = {"now": 0.0}
+    monkeypatch.setattr(live._time, "monotonic", lambda: t["now"])
+    monkeypatch.setattr(live.paper, "_pause", lambda s: (slept.append(s), t.__setitem__("now", t["now"] + s)))
+    bot._wait(None, 5)
+    assert slept == [1, 1, 1, 1, 1] and len(synced) == 2  # synced only while something was in flight

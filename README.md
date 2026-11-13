@@ -140,8 +140,11 @@ candles stopped mid-session. Both bots do this.
 Then a Telegram message lists the open legs, the stop-losses, any leg without one, and what comes next.
 The same rules apply while it runs (a difference must show twice in a row, as the order book can lag).
 
-No webhooks: INDmoney has no order webhook, and the bot polls `/order-book` every 5 s instead (its order
-WebSocket would be faster but needs a second always-open connection).
+No webhooks (leave the app's webhook URL empty): they would need a public address on this PC, and
+unauthenticated updates would have to be re-checked anyway. The bot reads `/order-book` instead: every
+5 s, and every second while an order is in flight (queued, working, being cancelled, or a stop whose
+trigger traded), so the shorts follow the hedges' fills and an exit follows its stop's cancel within about
+a second. INDmoney's order WebSocket would be no faster than that and adds a connection to keep alive.
 
 ### Simulating past sessions
 

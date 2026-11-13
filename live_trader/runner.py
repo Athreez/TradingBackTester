@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time as _time
 from datetime import date
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from paper_trader import runner as paper
 from paper_trader.runner import PaperBot, ist_now, setup_day_logfile
 
 HERE = Path(__file__).parent
+FAST_POLL_SECONDS = 1  # while an order is in flight, read INDmoney's order book this often
 CLOSE_POLLS = 6  # day end: polls (POLL_SECONDS apart) waiting for INDmoney to confirm the cancels
 
 log = logging.getLogger("live")
@@ -117,6 +119,15 @@ class LiveBot(PaperBot):
         self._log_new_fills()
         self._drain_alerts()
         self._save()
+
+    def _wait(self, ctx: Context, seconds: float) -> None:
+        """Instead of idling between polls, follow orders in flight every second: the shorts go out about a
+        second after the hedges fill, and an exit about a second after its stop's cancel is confirmed."""
+        end = _time.monotonic() + seconds
+        while (left := end - _time.monotonic()) > 0:
+            paper._pause(min(left, FAST_POLL_SECONDS))
+            if self.broker.in_flight():
+                self._sync_broker(ctx)
 
     def _abandon_entry(self, ctx: Context) -> None:
         """An entry leg failed: close whatever did fill and stop for the day (never hold an unhedged fly)."""

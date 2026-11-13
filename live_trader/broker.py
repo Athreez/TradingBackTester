@@ -132,6 +132,12 @@ class LiveBroker(SimBroker):
     def working(self) -> list[Sent]:
         return [s for s in self.sent.values() if not s.done]
 
+    def in_flight(self) -> bool:
+        """Something is about to change: an order queued, a market/limit order working, a cancel not yet
+        confirmed, or a stop whose trigger traded. A GTT resting far from its trigger doesn't count."""
+        return bool(self._outbox) or any(
+            s.kind == "order" or s.cancel_requested or self._by_id[s.order_id].triggered_at for s in self.working())
+
     # ---- Broker ---------------------------------------------------------
 
     def place_order(self, order: Order) -> Order:

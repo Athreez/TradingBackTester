@@ -198,6 +198,10 @@ class PaperBot:
     def _before_close(self, ctx: Context) -> None:
         pass
 
+    def _wait(self, ctx: Context, seconds: float) -> None:
+        """Between polls (the live bot follows orders in flight meanwhile)."""
+        _pause(seconds)
+
     def _snapshot_extra(self) -> dict:
         return {"mode": "paper"}
 
@@ -305,7 +309,7 @@ class PaperBot:
                 continue
             except Exception as e:  # network hiccup: keep the bot alive, retry next poll
                 log.warning("poll failed: %s", e)
-                _pause(POLL_SECONDS)
+                self._wait(ctx, POLL_SECONDS)  # orders in flight are still followed
                 continue
             data._frames.clear()
             self._sync_broker(ctx)
@@ -326,7 +330,7 @@ class PaperBot:
             if self.mirror:
                 self.mirror.poll()
             self._write_snapshot(data, "trading session")
-            _pause(POLL_SECONDS)
+            self._wait(ctx, POLL_SECONDS)
 
         self._before_close(ctx)
         row = close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, self.log_dir)
