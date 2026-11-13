@@ -1,9 +1,10 @@
-"""Local dashboard for the paper trading bot. Read-only: it never calls the broker API.
+"""Local dashboard for the trading bots. Read-only: it never calls the broker API.
 
 Run:  streamlit run paper_trader/dashboard.py      (opens http://localhost:8501)
 
-Reads paper_trader/state/live.json (written by the bot every poll) and the CSV
-journals in paper_trader/logs/.
+The sidebar switches between the paper bot (paper_trader/), the live bot (live_trader/) and a simulation
+(paper_trader/sim/). Each view reads that bot's state/live.json (written every poll) and the CSV
+journals in its logs/ folder.
 """
 from __future__ import annotations
 
@@ -18,6 +19,8 @@ import pandas as pd
 import streamlit as st
 
 HERE = Path(os.environ.get("PAPER_TRADER_DIR", Path(__file__).parent))  # override to inspect a replay
+LIVE_DIR = Path(__file__).parent.parent / "live_trader"
+LOCK_PATH = HERE / "state" / "bot.lock"  # the paper and live bots share this lock (one INDmoney login)
 LOG_DIR = HERE / "logs"
 STATE_DIR = HERE / "state"
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -54,7 +57,7 @@ def inr(x, signed: bool = False) -> str:
 
 def bot_running() -> bool:
     """True if the bot holds its single-instance lock."""
-    lock_path = STATE_DIR / "bot.lock"
+    lock_path = LOCK_PATH
     if not lock_path.exists():
         return False
     try:
@@ -72,6 +75,17 @@ def bot_running() -> bool:
         return False  # we could take the lock, so nobody holds it
     except OSError:
         return True
+
+
+def wrote_last(snap: dict | None) -> bool:
+    """The lock says *a* bot runs (paper and live share it); it is this view's bot if this view's snapshot
+    is newer than the other bot's."""
+    other = HERE / "state" / "live.json" if LIVE else LIVE_DIR / "state" / "live.json"
+    try:
+        theirs = json.loads(other.read_text()).get("updated_at", "")
+    except (OSError, ValueError):
+        theirs = ""
+    return bool(snap) and (snap.get("updated_at") or "") >= theirs
 
 
 def read_csv(name: str, dates=("ts",)) -> pd.DataFrame:
@@ -102,7 +116,7 @@ def data_signature() -> tuple:
     snap = read_snapshot()
     if snap:
         snap.pop("updated_at", None)
-    files = [LOG_DIR / n for n in ("fills.csv", "daily.csv", "equity.csv")] + sorted(LOG_DIR.glob("paper_*.log"))[-1:]
+    files = [LOG_DIR / n for n in ("fills.csv", "daily.csv", "equity.csv")] + sorted(LOG_DIR.glob("*_????????.log"))[-1:]
     return json.dumps(snap, sort_keys=True), tuple((p.name, p.stat().st_mtime_ns) for p in files if p.exists())
 
 
@@ -191,18 +205,19 @@ def with_total(df: pd.DataFrame, sum_cols: list[str]):
 
 # ---- page ----------------------------------------------------------------
 
-st.set_page_config(page_title="Paper Trading Bot", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Trading Bot", page_icon="📈", layout="wide")
 
-# Live paper account, or a replay written by `python -m paper_trader.simulate` (paper_trader/sim/).
+# Paper account, live (real money) account, or a replay written by `python -m paper_trader.simulate`.
 SIM_DIR = HERE / "sim"
-SIMULATION = False
-if (SIM_DIR / "state" / "live.json").exists():
-    view = st.sidebar.radio("View", ["Live paper account", "Simulation"],
-                            help="Simulation = past sessions replayed through the bot's engine "
-                                 "(python -m paper_trader.simulate --from ... --to ...)")
-    SIMULATION = view == "Simulation"
-    if SIMULATION:
-        LOG_DIR, STATE_DIR = SIM_DIR / "logs", SIM_DIR / "state"
+VIEWS = ["Paper", "💰 Live"] + (["Simulation"] if (SIM_DIR / "state" / "live.json").exists() else [])
+view = st.sidebar.radio("Bot", VIEWS, help="Paper = the paper bot (simulated fills). Live = the real-money bot "
+                        "(INDmoney orders). Simulation = past sessions replayed through the bot's engine "
+                        "(python -m paper_trader.simulate --from ... --to ...).")
+SIMULATION, LIVE = view == "Simulation", view == "💰 Live"
+if SIMULATION:
+    LOG_DIR, STATE_DIR = SIM_DIR / "logs", SIM_DIR / "state"
+elif LIVE:
+    LOG_DIR, STATE_DIR = LIVE_DIR / "logs", LIVE_DIR / "state"
 
 
 @st.fragment(run_every=WATCH_EVERY)
@@ -220,10 +235,11 @@ def live_status() -> None:
         st.info(f"Simulation: sessions {sim.get('from', '?')} to {sim.get('to', '?')} replayed minute by minute "
                 "through the paper bot's engine on downloaded candles. Not the live account.", icon="🧪")
         return
-    st.caption(f"Live · redraws when the bot writes new data · {now:%a %d %b %Y, %H:%M:%S} IST")
+    st.caption(f"{'💰 LIVE bot (real money)' if LIVE else 'Paper bot'} · redraws when the bot writes new data · "
+               f"{now:%a %d %b %Y, %H:%M:%S} IST")
 
     # -- bot health --------------------------------------------------------
-    running = bot_running()
+    running = bot_running() and wrote_last(snap)
     updated = datetime.fromisoformat(snap["updated_at"]) if snap else None
     age = (now - updated).total_seconds() if updated else None
     h1, h2, h3, h4 = st.columns(4)
@@ -235,7 +251,8 @@ def live_status() -> None:
     h4.metric("Login token valid until", datetime.fromisoformat(snap["token_valid_until"]).strftime("%d %b %H:%M")
               if snap and snap.get("token_valid_until") else "–")
     if not running:
-        st.warning("The bot is not running. Start it with `python -m paper_trader.runner`.", icon="⚠️")
+        st.warning(f"The {'live' if LIVE else 'paper'} bot is not running. Start it with "
+                   + ("`start_live_trading.bat`." if LIVE else "`start_paper_trading.bat`."), icon="⚠️")
     elif snap and snap["phase"].startswith(("login problem", "loading contracts failed")):
         st.error(snap["phase"], icon="🚫")
     elif age is not None and age > 60 and snap and snap["phase"] == "trading session":
@@ -250,11 +267,12 @@ def dashboard() -> None:
     c = theme()
     now = ist_now()
 
-    st.title(f"{'Simulation' if SIMULATION else 'Paper trading'} · {snap['strategy']}" if snap else "Paper trading")
+    kind = "Simulation" if SIMULATION else "💰 Live trading" if LIVE else "Paper trading"
+    st.title(f"{kind} · {snap['strategy']}" if snap else kind)
     live_status()
 
     if snap is None:
-        st.info("No data yet. The dashboard fills in once the bot has started.")
+        st.info(f"No data yet. This fills in once the {'live' if LIVE else 'paper'} bot has run.")
         return
     marker = STATE_DIR / "simulated_history.json"
     if not SIMULATION and marker.exists():
@@ -285,6 +303,8 @@ def dashboard() -> None:
     entered = (snap.get("note") or "").startswith("entered")
     t4.metric("Stop-loss today", f"{snap['day_sl_pct']:.0%}" if entered and snap.get("day_sl_pct") else "–")
     st.markdown(f"**Status:** {snap.get('note') or '–'}")
+    if snap.get("halted"):
+        st.error(f"No new entries: {snap['halted']}", icon="⛔")
 
     left, right = st.columns(2)
     with left:
@@ -303,6 +323,11 @@ def dashboard() -> None:
             st.dataframe(orders, hide_index=True, width="stretch")
         else:
             st.caption("No pending orders.")
+    if snap.get("live_orders"):
+        with st.expander(f"INDmoney orders today ({len(snap['live_orders'])})"):
+            st.dataframe(pd.DataFrame(snap["live_orders"]).rename(columns={
+                "tag": "Tag", "symbol": "Contract", "side": "Side", "qty": "Qty", "kind": "Kind", "filled": "Filled",
+                "price": "Avg price", "done": "Done", "status": "INDmoney status"}), hide_index=True, width="stretch")
 
     st.markdown("**Closed positions today**")
     closed = closed_positions(today_fills) if not today_fills.empty else pd.DataFrame()
@@ -354,7 +379,7 @@ def dashboard() -> None:
 
     # -- log -------------------------------------------------------------------
     st.subheader("Bot log")
-    logs = sorted(LOG_DIR.glob("paper_*.log"))
+    logs = sorted(LOG_DIR.glob("*_????????.log"))
     if logs:
         lines = logs[-1].read_text(encoding="utf-8", errors="replace").splitlines()
         problems = [l for l in lines if " WARNING " in l or " ERROR " in l]

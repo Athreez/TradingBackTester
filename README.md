@@ -170,7 +170,8 @@ streamlit run paper_trader/dashboard.py     # or scripts
 un_dashboard.cmd -> http://localhost:8501
 ```
 
-Read-only view of the bot (never calls the broker API): bot health and token
+The sidebar switches between **Paper**, **💰 Live** (the real-money bot's files in `live_trader/`) and
+**Simulation**. Read-only view of the bot (never calls the broker API): bot health and token
 expiry, today's VIX / stop-loss rule / legs with live P&L and pending stops,
 fills, intraday equity, daily P&L history and the log tail. Refreshes every 5s.
 
