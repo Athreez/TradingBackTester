@@ -126,12 +126,13 @@ class PaperBot:
         self.last_bar: datetime | None = None
         self.day: date | None = None
         self.day_closed = False
+        self.state_path, self.snapshot_path, self.log_dir = self._paths()
         self._restore()
         self._fills_logged = len(self.broker.fills())
         from paper_trader.commands import Controls
         from paper_trader.notify import Telegram, TradeNotifier
-        self.controls = Controls(STATE_PATH.parent / "controls.json")  # set by Telegram commands
-        self.tg = Telegram.from_env()  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env, else off
+        self.controls = Controls(self.state_path.parent / "controls.json")  # set by Telegram commands
+        self.tg = Telegram.from_env()  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_IDS in .env, else off
         self.notifier = TradeNotifier(self.tg, muted=lambda: self.controls.get("muted")) if self.tg else None
         self.mirror = None  # live_trader.mirror.OrderMirror for the current day, if on
 
@@ -140,21 +141,49 @@ class PaperBot:
         if self.tg is None:
             return
         from paper_trader.commands import CommandBot, CommandHandler, Paths
-        CommandBot(self.tg, CommandHandler(self.controls, Paths(SNAPSHOT_PATH, LOG_DIR, HERE.parent / "live_trader"),
-                                           now=ist_now), blocked_path=STATE_PATH.parent / "blocked_chats.json").start()
+        CommandBot(self.tg, CommandHandler(self.controls, Paths(self.snapshot_path, self.log_dir, HERE.parent / "live_trader"),
+                                           now=ist_now), blocked_path=self.state_path.parent / "blocked_chats.json").start()
+
+    # ---- hooks for live_trader.runner.LiveBot (no-ops on paper) -------------
+
+    def _paths(self) -> tuple[Path, Path, Path]:
+        """state.pkl, live.json (dashboard / commands), logs folder."""
+        return STATE_PATH, SNAPSHOT_PATH, LOG_DIR
+
+    def _new_broker(self) -> SimBroker:
+        return SimBroker(lambda i: None, self.costs, self.capital)
+
+    def _broker_class(self) -> type:
+        return SimBroker
+
+    def _start_broker_day(self, feed: LiveFeed, data: HistoricalMarketData, today: date) -> None:
+        pass
+
+    def _before_bar(self, live: bool) -> None:
+        pass
+
+    def _sync_broker(self, ctx: Context) -> None:
+        pass
+
+    def _before_close(self, ctx: Context) -> None:
+        pass
+
+    def _snapshot_extra(self) -> dict:
+        return {"mode": "paper"}
 
     # ---- state ----------------------------------------------------------
 
     def _restore(self) -> None:
-        if not STATE_PATH.exists():
-            self.broker = SimBroker(lambda i: None, self.costs, self.capital)
+        if not self.state_path.exists():
+            self.broker = self._new_broker()
             log.info("New paper account: capital %.0f, strategy %s", self.capital, self.strategy_name)
             return
-        state = pickle.loads(STATE_PATH.read_bytes())
+        state = pickle.loads(self.state_path.read_bytes())
         if state["strategy_name"] != self.strategy_name:
-            raise SystemExit(f"Saved state is for strategy '{state['strategy_name']}'. Move {STATE_PATH} "
+            raise SystemExit(f"Saved state is for strategy '{state['strategy_name']}'. Move {self.state_path} "
                              "away to start a fresh paper account for this strategy.")
-        self.broker = SimBroker.__new__(SimBroker)
+        cls = self._broker_class()
+        self.broker = cls.__new__(cls)
         self.broker.__dict__.update(state["broker"])
         if state["day"] == ist_now().date():
             # Mid-day restart: keep today's legs / SL state. Attributes added to the strategy since the
@@ -169,7 +198,7 @@ class PaperBot:
                  self.broker.cash, len(self.broker.positions()), self.last_bar)
 
     def _save(self) -> None:
-        save_state(STATE_PATH, self.strategy_name, self.broker, self.strategy, self.last_bar, self.day, self.day_closed)
+        save_state(self.state_path, self.strategy_name, self.broker, self.strategy, self.last_bar, self.day, self.day_closed)
 
     # ---- day lifecycle --------------------------------------------------
 
@@ -217,6 +246,7 @@ class PaperBot:
         ctx = Context(data, self.broker)
         session_open = datetime.combine(today, SESSION_START)
         self.mirror = self._make_mirror(feed, today)
+        self._start_broker_day(feed, data, today)
 
         while ist_now() < datetime.combine(today, CLOSE_AT):
             self._apply_controls(ctx, feed, today)
@@ -241,24 +271,28 @@ class PaperBot:
                 _pause(POLL_SECONDS)
                 continue
             data._frames.clear()
+            self._sync_broker(ctx)
 
             completed = now - BAR - GRACE  # bars with ts <= this have closed and been published
             after = self.last_bar if self.last_bar and self.last_bar.date() == today else None
             for ts in feed.index_bars(after, completed):
+                live = completed - ts < 2 * BAR  # older bars are catch-up after a late start
+                self._before_bar(live)
                 run_bar(self.strategy, ctx, self.broker, data, ts)
                 self.last_bar = ts
-                live = completed - ts < 2 * BAR  # older bars are catch-up after a late start
+                self._sync_broker(ctx)
                 self._log_new_fills(catch_up=not live)
                 if self.mirror:
                     self.mirror.sync(self.broker, ts, live=live)
-                _append_csv(LOG_DIR / "equity.csv", {"ts": ts, "equity": round(self.broker.equity(data.ltp), 2)})
+                _append_csv(self.log_dir / "equity.csv", {"ts": ts, "equity": round(self.broker.equity(data.ltp), 2)})
                 self._save()
             if self.mirror:
                 self.mirror.poll()
             self._write_snapshot(data, "trading session")
             _pause(POLL_SECONDS)
 
-        row = close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, LOG_DIR)
+        self._before_close(ctx)
+        row = close_day(self.strategy, ctx, self.broker, data, today, self.last_bar, self.log_dir)
         if self.mirror:
             self.mirror.sync(self.broker, self.last_bar, live=False)
             self.mirror.close_day()
@@ -315,9 +349,10 @@ class PaperBot:
         mirror = ("off" if self.mirror is None and not self._mirror_wanted() else
                   "on (starts with the session)" if self.mirror is None else
                   f"stopped: {self.mirror.halted}" if self.mirror.halted else "on")
-        write_snapshot(SNAPSHOT_PATH, phase=phase, strategy_name=self.strategy_name, broker=self.broker,
+        write_snapshot(self.snapshot_path, phase=phase, strategy_name=self.strategy_name, broker=self.broker,
                        strategy=self.strategy, data=data, day=self.day, last_bar=self.last_bar,
-                       extra={"paused": self.controls.get("paused"), "mirror": mirror, "plan": self._plan(data)})
+                       extra={"paused": self.controls.get("paused"), "mirror": mirror, "plan": self._plan(data),
+                              **self._snapshot_extra()})
 
     def _plan(self, data: HistoricalMarketData | None) -> dict | None:
         """Today's plan for /today: underlying, expiry, days to it, VIX now and the rule it gives."""
@@ -344,7 +379,7 @@ class PaperBot:
 
     def _log_new_fills(self, catch_up: bool = False) -> None:
         new = self.broker.fills()[self._fills_logged:]
-        log_fills(new, LOG_DIR)
+        log_fills(new, self.log_dir)
         self._fills_logged = len(self.broker.fills())
         if self.notifier and new:
             try:
@@ -353,7 +388,7 @@ class PaperBot:
                 log.warning("telegram notification failed: %s", e)
 
     def _setup_logfile(self, today: date) -> None:
-        setup_day_logfile(LOG_DIR, today)
+        setup_day_logfile(self.log_dir, today)
 
 
 # ---- shared with paper_trader/simulate.py (same journals and snapshot) ----
@@ -361,7 +396,8 @@ class PaperBot:
 def save_state(path: Path, strategy_name: str, broker: SimBroker, strategy, last_bar: datetime | None,
                day: date | None, day_closed: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    broker_state = {k: v for k, v in broker.__dict__.items() if k != "_quote"}
+    transient = getattr(broker, "TRANSIENT", ("_quote",))  # live connections etc. are re-attached on restore
+    broker_state = {k: v for k, v in broker.__dict__.items() if k not in transient}
     tmp = path.with_suffix(".tmp")
     tmp.write_bytes(pickle.dumps({
         "strategy_name": strategy_name, "broker": broker_state, "strategy": strategy,
@@ -379,13 +415,13 @@ def log_fills(fills, log_dir: Path) -> None:
             "price": round(f.price, 2), "charges": round(f.charges, 2), "tag": f.tag})
 
 
-def setup_day_logfile(log_dir: Path, day: date, fmt: logging.Formatter | None = None) -> None:
+def setup_day_logfile(log_dir: Path, day: date, fmt: logging.Formatter | None = None, prefix: str = "paper") -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     for h in [h for h in root.handlers if isinstance(h, logging.FileHandler)]:
         root.removeHandler(h)
         h.close()
-    fh = logging.FileHandler(log_dir / f"paper_{day:%Y%m%d}.log", encoding="utf-8")
+    fh = logging.FileHandler(log_dir / f"{prefix}_{day:%Y%m%d}.log", encoding="utf-8")
     fh.setFormatter(fmt or logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.addHandler(fh)
     protect_handlers(root)  # mask tokens and secrets in every log line

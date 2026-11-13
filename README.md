@@ -94,6 +94,37 @@ Safeguards:
 
 Needs the PC's static IP registered at indstocks.com/app/api-trading/access-tokens.
 
+### Live trading (real money)
+
+```sh
+start_live_trading.bat                 # or: python -m live_trader.runner [--once]
+```
+
+The paper bot's loop with a real broker (`live_trader/broker.py`): same strategy, candles, Telegram
+messages and commands, but orders go to INDmoney and fills are read back from it. Needs
+`LIVE_TRADING_ENABLED=yes` in `.env` and the static IP above. It takes the paper bot's lock, so only one
+of the two runs (they would share one INDmoney login). Journals in `live_trader/logs/` (`orders.csv` and
+`events.csv` record every order sent and every status INDmoney reported), state in `live_trader/state/`.
+
+How orders are handled:
+- Hedges go first; the shorts are sent only once both hedges have filled. If any entry leg fails, nothing
+  more is sent, whatever filled is closed, and the day is over.
+- Stop-losses are GTT trigger orders, held on INDmoney's servers (they fire even if the PC is off). A stop
+  INDmoney refuses is replaced by closing that leg at market.
+- INDmoney turns market orders into limit orders within a price band; one not filled within a minute is
+  cancelled and the rest sent again (3 tries, then an alert to do it by hand).
+- An exit waits until INDmoney confirms the cancel of that leg's stop, and is capped to what is still
+  open, so a stop that fires during the exit is never bought back twice.
+- A request with no clear answer (timeout) is looked up by its `remarks` before anything is resent.
+- Every 30 s the positions INDmoney reports (intraday product) are checked against the bot's. A stop that
+  shows only in positions is booked at the day's average price; any other difference that lasts 90 s
+  stops new entries and alerts.
+- Refused outright: orders above `LIVE_MAX_LOTS`, entries from bars replayed after a late start, entries
+  past `LIVE_MAX_ORDERS` a day. At day end every open order, GTTs included, is cancelled.
+
+No webhooks: INDmoney has no order webhook, and the bot polls `/order-book` every 5 s instead (its order
+WebSocket would be faster but needs a second always-open connection).
+
 ### Simulating past sessions
 
 ```sh

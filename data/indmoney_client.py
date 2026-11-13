@@ -153,6 +153,13 @@ class IndMoneyClient:
     def order_book(self) -> list[dict]:
         return self._json("/order-book") or []
 
+    def positions(self) -> list[dict]:
+        """GET /portfolio/positions: rows with security_id, product, net_qty, day_buy_qty/_val, day_sell_qty/_val."""
+        data = self._json("/portfolio/positions", {"segment": "derivative", "product": "intraday"}) or []
+        if isinstance(data, dict):  # tolerate {"positions": [...]} as well as a bare list
+            data = next((v for v in data.values() if isinstance(v, list)), [])
+        return data
+
     def order(self, order_id: str, segment: str = "DERIVATIVE") -> dict:
         return self._send("GET", "/order", {"order_id": order_id, "segment": segment}).get("data") or {}
 

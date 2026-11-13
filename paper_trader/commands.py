@@ -28,7 +28,7 @@ COMMANDS = [
     ("today", "today's plan: index, expiry, VIX and the rule it gives, entry time"),
     ("pnl", "P&L today, this week, this month and since start"),
     ("history", "last N days, e.g. /history 10"),
-    ("live", "INDmoney mirror: orders sent today and how INDmoney answered"),
+    ("live", "INDmoney orders sent today and how INDmoney answered"),
     ("health", "token, data freshness, mirror and pause state"),
     ("log", "last N lines of today's log, e.g. /log 20"),
     ("pause", "skip new entries until /resume (open trades keep their stops)"),
@@ -130,11 +130,14 @@ class CommandHandler:
         s = self._snap()
         if not s:
             return "No status yet: the bot has not written its snapshot."
-        lines = [f"<b>{html.escape(s.get('phase') or '')}</b> · updated {self._age(s.get('updated_at'))}",
+        mode = "💰 <b>LIVE</b> · " if s.get("mode") == "live" else ""
+        lines = [f"{mode}<b>{html.escape(s.get('phase') or '')}</b> · updated {self._age(s.get('updated_at'))}",
                  f"Day {s.get('day')} · {s.get('underlying') or 'no underlying'} · state {s.get('state')}",
                  html.escape(s.get("note") or "")]
         if self.controls.get("paused"):
             lines.append("⏸ Entries paused (/resume)")
+        if s.get("halted"):
+            lines.append(f"⛔ No new entries: {html.escape(s['halted'])}")
         if s.get("positions"):
             lines.append("<b>Open legs</b>")
             total = 0.0
@@ -202,6 +205,14 @@ class CommandHandler:
     def cmd_live(self, _="") -> str:
         s = self._snap()
         day = s.get("day") or self.now().date().isoformat()
+        if s.get("mode") == "live":
+            lines = [f"<b>LIVE orders {day}</b>"] + [
+                f"{o['tag']} {o['side']} {o['symbol']} × {o['qty']}: {html.escape(o['status'])}"
+                + (f" · filled {o['filled']} @ {o['price']:.2f}" if o.get("filled") else "")
+                for o in s.get("live_orders") or []]
+            if s.get("halted"):
+                lines.append(f"⛔ {html.escape(s['halted'])}")
+            return "\n".join(lines) if len(lines) > 1 else f"No live orders on {day}."
         lines = [f"Mirror: {html.escape(s.get('mirror') or 'unknown')}"]
         state = self.paths.live_dir / "state" / f"mirror_{day.replace('-', '')}.json"
         if not state.exists():
@@ -234,7 +245,7 @@ class CommandHandler:
 
     def cmd_log(self, arg="") -> str:
         n = max(1, min(int(arg or 20), 60))
-        logs = sorted(self.paths.log_dir.glob("paper_*.log"))
+        logs = sorted(self.paths.log_dir.glob("*_????????.log"))
         if not logs:
             return "No log yet."
         tail = logs[-1].read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
@@ -262,6 +273,8 @@ class CommandHandler:
         return "🛑 Closing everything on the next bar; you'll get the exit messages."
 
     def cmd_mirror(self, arg="") -> str:
+        if self._snap().get("mode") == "live":
+            return "The bot is trading live: there is no mirror to switch."
         if arg.lower() not in ("on", "off"):
             return "Use /mirror on or /mirror off."
         self.controls.set("mirror", arg.lower() == "on")
