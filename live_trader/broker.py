@@ -21,7 +21,7 @@ explains the difference exactly is booked at the day's average price (a triggere
 doesn't show); any other difference that persists halts new entries and alerts.
 
 Refused outright (REJECTED + alert): orders above `max_lots`, and opening orders while halted, from
-catch-up bars after a late start, or past the daily order cap.
+catch-up bars after a late start, or beyond `max_entries` a day (the fly is 4; retries don't count).
 """
 from __future__ import annotations
 
@@ -78,12 +78,12 @@ class LiveBroker(SimBroker):
     TRANSIENT = ("_quote", "client", "codes", "notifier", "now")  # not pickled with the bot's state
 
     def __init__(self, client, codes: dict[str, str], costs: CostModel, initial_capital: float, log_dir: Path,
-                 now: Callable[[], datetime] = datetime.now, max_lots: int = 1, max_orders: int = 40,
+                 now: Callable[[], datetime] = datetime.now, max_lots: int = 1, max_entries: int = 4,
                  chase_seconds: int = 60, reconcile_seconds: int = 30, mismatch_checks: int = 3):
         super().__init__(lambda inst: None, costs, initial_capital)
         self.attach(client, codes, now)
         self.log_dir = log_dir
-        self.max_lots, self.max_orders = max_lots, max_orders
+        self.max_lots, self.max_entries = max_lots, max_entries
         self.chase = timedelta(seconds=chase_seconds)
         self.reconcile_every = timedelta(seconds=reconcile_seconds)
         self.mismatch_checks = mismatch_checks
@@ -99,7 +99,7 @@ class LiveBroker(SimBroker):
         self.entry_failed: str | None = None  # an opening order failed: the runner flattens and stops for the day
         self.accept_opening = True  # False while replaying catch-up bars
         self.day: date | None = None
-        self.orders_sent = 0
+        self.entries_today = 0  # opening orders the strategy placed today (retries not counted)
 
     def attach(self, client, codes: dict[str, str], now: Callable[[], datetime]) -> None:
         """(Re)connect the parts that aren't saved with the bot's state."""
@@ -109,7 +109,7 @@ class LiveBroker(SimBroker):
 
     def start_day(self, day: date) -> None:
         if self.day != day:
-            self.day, self.orders_sent, self.halted, self.entry_failed = day, 0, None, None
+            self.day, self.entries_today, self.halted, self.entry_failed = day, 0, None, None
             self._mismatch.clear()
         self.accept_opening = True
         for s in self.sent.values():  # GTTs live for a year on INDmoney: nothing from an earlier day stays
@@ -143,13 +143,14 @@ class LiveBroker(SimBroker):
             why = f"trading halted: {self.halted}"
         elif opening and not self.accept_opening:
             why = "placed while catching up after a late start"
-        elif opening and self.orders_sent >= self.max_orders:
-            why = f"daily cap of {self.max_orders} orders reached"
+        elif opening and self.entries_today >= self.max_entries:
+            why = f"already placed {self.max_entries} entry orders today (LIVE_MAX_ENTRY_ORDERS)"
         elif opening and self.entry_failed:
             why = f"entry already failed: {self.entry_failed}"
         if why:
             self._reject(order, why)
             return order
+        self.entries_today += opening
         self._pending[order.id] = order
         self._outbox.append(order.id)
         return order
@@ -273,7 +274,6 @@ class LiveBroker(SimBroker):
             body.update(order_type="MARKET")
         s = Sent(order.id, remark, kind, self.now(), order.quantity, self._opening[order.id], attempt)
         self.sent[order.id] = s
-        self.orders_sent += 1
         status, error = "", ""
         try:
             data = (self.client.place_order if kind == "order" else self.client.place_smart_order)(body)

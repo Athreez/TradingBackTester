@@ -120,7 +120,7 @@ How orders are handled:
   shows only in positions is booked at the day's average price; any other difference that lasts 90 s
   stops new entries and alerts.
 - Refused outright: orders above `LIVE_MAX_LOTS`, entries from bars replayed after a late start, entries
-  past `LIVE_MAX_ORDERS` a day. At day end every open order, GTTs included, is cancelled.
+  beyond `LIVE_MAX_ENTRY_ORDERS` a day (4: the fly's legs; stops, exits and retries don't count). At day end every open order, GTTs included, is cancelled.
 
 No webhooks: INDmoney has no order webhook, and the bot polls `/order-book` every 5 s instead (its order
 WebSocket would be faster but needs a second always-open connection).

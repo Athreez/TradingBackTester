@@ -8,7 +8,8 @@ live_trader/logs/ (fills.csv, daily.csv, equity.csv, orders.csv, events.csv, liv
 to live_trader/state/. It takes the paper bot's lock, so the two never run at once: they would share (and
 fight over) one INDmoney login.
 
-.env: LIVE_MAX_LOTS (default 1) caps every order; LIVE_MAX_ORDERS (default 40) caps opening orders a day.
+.env: LIVE_MAX_LOTS (default 1) caps every order; LIVE_MAX_ENTRY_ORDERS (default 4) caps entry orders a day
+(stops, exits and retries are never blocked).
 """
 from __future__ import annotations
 
@@ -44,7 +45,7 @@ class LiveBot(PaperBot):
     def _new_broker(self) -> LiveBroker:
         log.info("New LIVE account record: capital %.0f, strategy %s", self.capital, self.strategy_name)
         return LiveBroker(self.client, {}, self.costs, self.capital, self.log_dir, now=ist_now,
-                          max_lots=int(env("LIVE_MAX_LOTS", "1")), max_orders=int(env("LIVE_MAX_ORDERS", "40")))
+                          max_lots=int(env("LIVE_MAX_LOTS", "1")), max_entries=int(env("LIVE_MAX_ENTRY_ORDERS", "4")))
 
     def _broker_class(self) -> type:
         return LiveBroker

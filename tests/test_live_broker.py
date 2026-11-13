@@ -361,3 +361,17 @@ def test_rejected_hedge_closes_the_other_and_never_sells(store, tmp_path):  # no
                    for b in fake.sent())
     assert [f.tag for f in broker.fills()] == ["hedge:CE", "entry-failed"]
     assert broker.positions() == {} and strategy.state == "DONE" and "entry abandoned" in strategy.note
+
+
+def test_only_four_entry_orders_a_day(setup):
+    b, fake, clock = setup
+    for _ in range(4):
+        assert b.place_order(order(HEDGE, Side.BUY, tag="hedge:CE")).status is OrderStatus.PENDING
+        b.send_pending()
+        tick(b, clock)
+    fifth = b.place_order(order(HEDGE, Side.BUY, tag="hedge:CE"))
+    assert fifth.status is OrderStatus.REJECTED and "LIVE_MAX_ENTRY_ORDERS" in b.alerts[-1]
+    b.place_order(order(HEDGE, Side.SELL, tag="exit-time"))  # exits are never blocked
+    b.send_pending()
+    tick(b, clock)
+    assert b.positions()[HEDGE].quantity == 225  # 4 bought, 1 lot sold back
