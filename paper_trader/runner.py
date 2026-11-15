@@ -342,13 +342,17 @@ class PaperBot:
         self._log_new_fills()
         if self.notifier and (self.last_bar and self.last_bar.date() == today):  # not on market holidays
             try:
-                self.notifier.day_summary(today, row, self.strategy, self.broker.initial_capital,
-                                          self.mirror.summary() if self.mirror else "")
+                self._send_day_summary(today, row)
             except Exception as e:
                 log.warning("telegram day summary failed: %s", e)
         self.day_closed = True
         self._save()
         self._write_snapshot(data, "session closed")
+
+    def _send_day_summary(self, today: date, row: dict) -> None:
+        """Telegram day summary from the bot's own journal (the live bot sends INDmoney's figures instead)."""
+        self.notifier.day_summary(today, row, self.strategy, self.broker.initial_capital,
+                                  self.mirror.summary() if self.mirror else "")
 
     def _mirror_wanted(self) -> bool:
         """/mirror on|off from Telegram overrides LIVE_ORDERS in .env."""

@@ -16,12 +16,13 @@ from __future__ import annotations
 import argparse
 import logging
 import time as _time
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from core.config import env, load_env
 from core.logsafe import protect_handlers
 from core.strategy_base import Context
+from live_trader import figures as ind
 from live_trader.broker import LiveBroker
 from paper_trader import runner as paper
 from paper_trader.runner import PaperBot, ist_now, setup_day_logfile
@@ -29,6 +30,7 @@ from paper_trader.runner import PaperBot, ist_now, setup_day_logfile
 HERE = Path(__file__).parent
 FAST_POLL_SECONDS = 1  # while an order is in flight, read INDmoney's order book this often
 CLOSE_POLLS = 6  # day end: polls (POLL_SECONDS apart) waiting for INDmoney to confirm the cancels
+INDMONEY_EVERY = timedelta(seconds=30)  # how often INDmoney's funds / positions figures are read
 
 log = logging.getLogger("live")
 
@@ -37,9 +39,30 @@ class LiveBot(PaperBot):
     broker: LiveBroker
 
     def __init__(self, strategy_name: str, capital: float | None):
+        self._ind: dict | None = None  # INDmoney's latest figures (live_trader/figures.py)
+        self._ind_at: datetime | None = None
         super().__init__(strategy_name, capital)
         self.broker.attach(self.client, {}, ist_now)
         self.broker._quote = lambda inst: None  # set to the day's candles in _run_day
+
+    def _indmoney(self, force: bool = False) -> dict | None:
+        """INDmoney's own figures (/funds + /portfolio/positions), read at most every 30 s. During the
+        session each fresh read is also logged, for the dashboard's intraday chart."""
+        now = ist_now()
+        if not force and self._ind_at and now - self._ind_at < INDMONEY_EVERY:
+            return self._ind
+        self._ind_at = now  # also after a failure: don't retry on every poll
+        try:
+            self._ind = ind.figures(self.client.funds() or {}, self.client.positions(), now)
+        except Exception as e:  # informational only: never let it disturb trading
+            log.warning("could not read INDmoney's funds/positions: %s", e)
+            return self._ind
+        if now.weekday() < 5 and paper.SESSION_START <= now.time() <= paper.SESSION_END:
+            f = self._ind
+            ind.append(self.log_dir, ind.INTRADAY, {"ts": now.isoformat(timespec="seconds"), "net": round(f["net"], 2),
+                                                    "realized": f["realized"], "unrealized": f["unrealized"],
+                                                    "charges": round(f["brokerage"] + f["charges"], 2)})
+        return self._ind
 
     def _paths(self):
         return HERE / "state" / "state.pkl", HERE / "state" / "live.json", HERE / "logs"
@@ -60,7 +83,7 @@ class LiveBot(PaperBot):
 
     def _snapshot_extra(self) -> dict:
         b = self.broker
-        return {"mode": "live", "mirror": "not used (live trading)", "halted": b.halted,
+        return {"mode": "live", "mirror": "not used (live trading)", "halted": b.halted, "indmoney": self._indmoney(),
                 "live_orders": [{"tag": b._by_id[s.order_id].tag, "symbol": b._by_id[s.order_id].instrument.symbol,
                                  "side": b._by_id[s.order_id].side.value, "qty": s.qty, "kind": s.kind,
                                  "filled": s.filled, "price": s.avg_price, "done": s.done,
@@ -161,6 +184,17 @@ class LiveBot(PaperBot):
                 f"{i.symbol} {p.quantity}" for i, p in b.positions().items()) + ". Check the INDmoney app.")
         self._log_new_fills()
         self._drain_alerts()
+        if self.last_bar and self.last_bar.date() == self.day:  # a trading day (not a holiday): record it
+            fig = self._indmoney(force=True)
+            if fig:
+                ind.append(self.log_dir, ind.DAILY, ind.daily_row(self.day, fig, traded=any(f.ts.date() == self.day for f in b.fills())))
+
+    def _send_day_summary(self, today: date, row: dict) -> None:
+        """The day's result as INDmoney reports it."""
+        fig = self._indmoney()
+        if fig is None:
+            return super()._send_day_summary(today, row)
+        self.notifier.indmoney_day_summary(today, fig, ind.total_since_start(self.log_dir, fig, today), self.strategy)
 
     def _drain_alerts(self) -> None:
         alerts, self.broker.alerts = self.broker.alerts, []

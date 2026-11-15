@@ -142,7 +142,13 @@ class CommandHandler:
             lines.append("⏸ Entries paused (/resume)")
         if s.get("halted"):
             lines.append(f"⛔ No new entries: {html.escape(s['halted'])}")
-        if s.get("positions"):
+        fig = s.get("indmoney") if s.get("mode") == "live" else None
+        if fig:  # live: INDmoney's own positions and P&L
+            open_legs = [p for p in fig["positions"] if p["qty"]]
+            if open_legs:
+                lines.append("<b>Open legs (INDmoney)</b>")
+                lines += [f"{p['contract']} {p['qty']:+d} @ {p['avg_price']:.2f}" for p in open_legs]
+        elif s.get("positions"):
             lines.append("<b>Open legs</b>")
             total = 0.0
             for p in s["positions"]:
@@ -156,7 +162,11 @@ class CommandHandler:
             for o in s["open_orders"]:
                 lim = f" limit {o['limit']}" if o.get("limit") else ""
                 lines.append(f"{o['side']} {o['symbol']} × {o['qty']} trigger {o.get('trigger')}{lim}")
-        lines.append(f"Equity {_inr(s.get('equity', 0))}")
+        if fig:
+            lines.append(f"INDmoney today {_inr(fig['net'], True)} (unrealized {_inr(fig['unrealized'], True)}) · "
+                         f"available {_inr(fig['available'])} · as of {fig['at'][11:16]}")
+        else:
+            lines.append(f"Equity {_inr(s.get('equity', 0))}")
         return "\n".join(l for l in lines if l)
 
     def cmd_today(self, _="") -> str:
@@ -176,8 +186,33 @@ class CommandHandler:
             lines.append("⏸ Entries paused (/resume)")
         return "\n".join(lines)
 
+    def _indmoney_pnl(self, s: dict) -> str:
+        """Live bot: INDmoney's figures (today from /funds, earlier days as recorded at each close)."""
+        from live_trader import figures as ind
+        fig, rows, today = s.get("indmoney"), ind.read_daily(self.paths.log_dir), self.now().date()
+        recorded = {r["date"] for r in rows}
+
+        def since(day: date) -> float:
+            past = sum(float(r["net"]) for r in rows if date.fromisoformat(r["date"]) >= day)
+            return past + (fig["net"] if fig and today.isoformat() not in recorded else 0.0)
+
+        lines = ["<b>INDmoney P&L</b>"]
+        if fig:
+            lines.append(f"Today {_inr(fig['net'], True)} (realized {_inr(fig['realized'], True)}, unrealized "
+                         f"{_inr(fig['unrealized'], True)}, brokerage {_inr(fig['brokerage'])}, charges {_inr(fig['charges'])})")
+        week_start = today - timedelta(days=today.weekday())
+        lines += [f"This week {_inr(since(week_start), True)}",
+                  f"This month {_inr(since(today.replace(day=1)), True)}",
+                  f"Since start {_inr(ind.total_since_start(self.paths.log_dir, fig, today), True)}"]
+        if fig:
+            lines.append(f"Available {_inr(fig['available'])} · as of {fig['at'][11:16]}")
+        return "\n".join(lines)
+
     def cmd_pnl(self, _="") -> str:
-        s, rows = self._snap(), self._daily()
+        s = self._snap()
+        if s.get("mode") == "live":
+            return self._indmoney_pnl(s)
+        rows = self._daily()
         equity = float(s.get("equity") or (rows[-1]["equity"] if rows else 0))
         start = float(s.get("initial_capital") or 0)
         today = self.now().date()
@@ -196,6 +231,18 @@ class CommandHandler:
 
     def cmd_history(self, arg="") -> str:
         n = max(1, min(int(arg or 10), 30))
+        if self._snap().get("mode") == "live":  # INDmoney's daily figures
+            from live_trader import figures as ind
+            rows = ind.read_daily(self.paths.log_dir)[-n:]
+            if not rows:
+                return "No completed live sessions yet."
+            out = [f"{date.fromisoformat(r['date']):%a %d %b}  "
+                   + ("· no trade" if not int(r["traded"]) else f"{'✅' if float(r['net']) > 0 else '❌'} {_inr(float(r['net']), True)}")
+                   for r in rows]
+            traded = [r for r in rows if int(r["traded"])]
+            out.append(f"\n{len(traded)} traded, {sum(float(r['net']) > 0 for r in traded)} won, "
+                       f"net {_inr(sum(float(r['net']) for r in rows), True)} (INDmoney)")
+            return "\n".join(out)
         rows = self._daily()[-n:]
         if not rows:
             return "No completed sessions yet."

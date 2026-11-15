@@ -20,7 +20,7 @@ import pandas as pd
 import streamlit as st
 
 HERE = Path(os.environ.get("PAPER_TRADER_DIR", Path(__file__).parent))  # override to inspect a replay
-LIVE_DIR = Path(__file__).parent.parent / "live_trader"
+LIVE_DIR = Path(os.environ.get("LIVE_TRADER_DIR", Path(__file__).parent.parent / "live_trader"))
 LOCK_PATH = HERE / "state" / "bot.lock"  # the paper and live bots share this lock (one INDmoney login)
 LOG_DIR = HERE / "logs"
 STATE_DIR = HERE / "state"
@@ -298,13 +298,32 @@ def dashboard() -> None:
     before = daily[daily["date"].dt.date < today] if not daily.empty else daily
     start_equity = float(before["equity"].iloc[-1]) if len(before) else snap["initial_capital"]
     traded = daily[daily["fills"] > 0] if not daily.empty else daily
+    fig = snap.get("indmoney") if LIVE else None  # live: INDmoney's own figures (live_trader/figures.py)
+    ind_daily = read_csv("indmoney_daily.csv", dates=("date",)) if LIVE else pd.DataFrame()
+    if not ind_daily.empty:
+        ind_daily = ind_daily.drop_duplicates("date", keep="last").sort_values("date")
     a1, a2, a3, a4 = st.columns(4)
-    a1.metric("Equity", inr(snap["equity"]))
-    a2.metric("Total P&L", inr(snap["equity"] - snap["initial_capital"], signed=True),
-              help=f"Since start, on {inr(snap['initial_capital'])} capital, after charges")
-    a3.metric("Today's P&L", inr(snap["equity"] - start_equity, signed=True),
-              help="Equity now (open positions at last price, after charges) minus equity at the previous close")
-    a4.metric("Days traded / won", f"{len(traded)} / {int((traded['net'] > 0).sum())}" if len(traded) else "0 / 0")
+    if LIVE:
+        recorded = set(ind_daily["date"].dt.date) if not ind_daily.empty else set()
+        total = (ind_daily["net"].sum() if not ind_daily.empty else 0.0) + (
+            fig["net"] if fig and today not in recorded else 0.0)
+        ind_traded = ind_daily[ind_daily["traded"] > 0] if not ind_daily.empty else ind_daily
+        a1.metric("Available balance", inr(fig["available"]) if fig else "–",
+                  help="INDmoney: balance available for selling options")
+        a2.metric("Total P&L", inr(total, signed=True), help="INDmoney: sum of each day's net P&L since the live bot started")
+        a3.metric("Today's P&L", inr(fig["net"], signed=True) if fig else "–",
+                  help=(f"INDmoney: realized {inr(fig['realized'], True)} + unrealized {inr(fig['unrealized'], True)} "
+                        f"− brokerage {inr(fig['brokerage'])} − charges {inr(fig['charges'])}") if fig else None)
+        a4.metric("Days traded / won", f"{len(ind_traded)} / {int((ind_traded['net'] > 0).sum())}" if len(ind_traded) else "0 / 0")
+        st.caption(f"All figures from INDmoney, as of {fig['at'][11:19]}" if fig else
+                   "INDmoney's figures appear once the live bot has read them (every 30 s while running).")
+    else:
+        a1.metric("Equity", inr(snap["equity"]))
+        a2.metric("Total P&L", inr(snap["equity"] - snap["initial_capital"], signed=True),
+                  help=f"Since start, on {inr(snap['initial_capital'])} capital, after charges")
+        a3.metric("Today's P&L", inr(snap["equity"] - start_equity, signed=True),
+                  help="Equity now (open positions at last price, after charges) minus equity at the previous close")
+        a4.metric("Days traded / won", f"{len(traded)} / {int((traded['net'] > 0).sum())}" if len(traded) else "0 / 0")
 
     # -- today ---------------------------------------------------------------
     st.subheader(f"Session {today:%a %d %b %Y}")
@@ -321,7 +340,15 @@ def dashboard() -> None:
     left, right = st.columns(2)
     with left:
         st.markdown("**Open positions**")
-        if snap["positions"]:
+        open_ind = [p for p in fig["positions"] if p["qty"]] if fig else []
+        if LIVE:
+            if open_ind:
+                st.dataframe(pd.DataFrame(open_ind)[["contract", "qty", "avg_price"]].rename(columns={
+                    "contract": "Contract", "qty": "Qty (− = short)", "avg_price": "Avg price"}), hide_index=True, width="stretch")
+                st.caption(f"Unrealized P&L (INDmoney): {inr(fig['unrealized'], signed=True)}")
+            else:
+                st.caption("No open positions on INDmoney.")
+        elif snap["positions"]:
             pos = pd.DataFrame(snap["positions"]).rename(columns={
                 "symbol": "Contract", "qty": "Qty (− = short)", "avg_price": "Entry", "ltp": "Last", "unrealized": "Unrealized P&L"})
             st.dataframe(with_total(pos, ["Unrealized P&L"]), hide_index=True, width="stretch")
@@ -342,13 +369,25 @@ def dashboard() -> None:
                 "price": "Avg price", "done": "Done", "status": "INDmoney status"}), hide_index=True, width="stretch")
 
     st.markdown("**Closed positions today**")
-    closed = closed_positions(today_fills) if not today_fills.empty else pd.DataFrame()
-    if not closed.empty:
+    closed = closed_positions(today_fills) if not today_fills.empty and not LIVE else pd.DataFrame()
+    closed_ind = [p for p in fig["positions"] if not p["qty"]] if fig else []
+    if LIVE:
+        if closed_ind:
+            st.dataframe(with_total(pd.DataFrame(closed_ind)[["contract", "buy_qty", "buy_avg", "sell_qty", "sell_avg", "realized"]]
+                                    .rename(columns={"contract": "Contract", "buy_qty": "Bought", "buy_avg": "Buy avg",
+                                                     "sell_qty": "Sold", "sell_avg": "Sell avg", "realized": "Realized P&L"}),
+                                    ["Realized P&L"]), hide_index=True, width="stretch")
+            st.caption(f"INDmoney realized P&L, before brokerage {inr(fig['brokerage'])} and charges {inr(fig['charges'])}.")
+        else:
+            st.caption("No closed positions today on INDmoney.")
+    elif not closed.empty:
         st.dataframe(with_total(closed, ["Realized P&L", "Charges", "Net P&L"]), hide_index=True, width="stretch")
     else:
         st.caption("No closed positions today.")
 
     st.markdown("**Today's fills**")
+    if LIVE and not today_fills.empty:  # INDmoney's fill prices; the bot's charge estimate is left out
+        today_fills = today_fills.drop(columns=["charges"], errors="ignore")
     if not today_fills.empty:
         st.dataframe(today_fills.assign(ts=today_fills["ts"].dt.strftime("%H:%M")).rename(columns={
             "ts": "Time", "symbol": "Contract", "side": "Side", "qty": "Qty", "price": "Price",
@@ -356,7 +395,14 @@ def dashboard() -> None:
     else:
         st.caption("No fills today.")
 
-    if not equity.empty:
+    if LIVE:
+        ind_intraday = read_csv("indmoney_intraday.csv")
+        ind_intraday = ind_intraday[ind_intraday["ts"].dt.date == today] if not ind_intraday.empty else ind_intraday
+        if not ind_intraday.empty:
+            st.markdown("**P&L today (INDmoney, every 30 s)**")
+            st.altair_chart(line_chart(ind_intraday, "ts", "net", "Time (IST)", "%H:%M", c,
+                                       y_title="Today's P&L (₹)", label="P&L", zero_line=True), width="stretch")
+    elif not equity.empty:
         intraday = equity[equity["ts"].dt.date == today]
         if not intraday.empty:
             st.markdown("**P&L today (per minute)**")
@@ -366,7 +412,35 @@ def dashboard() -> None:
 
     # -- history -------------------------------------------------------------
     st.subheader("History")
-    if daily.empty:
+    if LIVE:
+        if ind_daily.empty:
+            st.caption("No completed live sessions yet. INDmoney's figures are recorded at each day's close.")
+        else:
+            d = ind_daily.assign(charges=ind_daily["brokerage"] + ind_daily["charges"])
+            dt = d[d["traded"] > 0]
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Net (INDmoney)", inr(d["net"].sum(), signed=True))
+            s2.metric("Brokerage + charges (INDmoney)", inr(d["charges"].sum()))
+            s3.metric("Win rate (traded days)", f"{(dt['net'] > 0).mean():.0%}" if len(dt) else "–")
+            s4.metric("Worst day", inr(d["net"].min(), signed=True))
+            h_left, h_right = st.columns(2)
+            with h_left:
+                st.markdown("**Daily P&L (INDmoney)**")
+                st.altair_chart(pnl_bars(d, c), width="stretch")
+            with h_right:
+                st.markdown("**Available balance at each close (INDmoney)**")
+                st.altair_chart(line_chart(d, "date", "available", "Day", "%d %b", c, y_title="Available (₹)",
+                                           label="Available"), width="stretch")
+            with st.expander("Daily table (INDmoney)"):
+                st.dataframe(d.assign(date=d["date"].dt.strftime("%a %d %b %Y"))[
+                    ["date", "traded", "realized", "unrealized", "brokerage", "charges", "net", "available"]].rename(columns={
+                    "date": "Day", "traded": "Traded", "realized": "Realized", "unrealized": "Unrealized",
+                    "brokerage": "Brokerage", "charges": "Brokerage + charges", "net": "Net", "available": "Available"}),
+                    hide_index=True, width="stretch")
+            with st.expander("All fills (INDmoney prices)"):
+                st.dataframe(fills.drop(columns=["charges"], errors="ignore").sort_values("ts", ascending=False)
+                             if not fills.empty else fills, hide_index=True, width="stretch")
+    elif daily.empty:
         st.caption("No completed sessions yet. A row is added at 15:35 each trading day.")
     else:
         s1, s2, s3, s4 = st.columns(4)

@@ -147,6 +147,17 @@ class TradeNotifier:
     def alert(self, text: str) -> None:
         self.tg.send(f"⚠️ <b>{html.escape(text)}</b>")
 
+    def indmoney_day_summary(self, day: date, fig: dict, total: float, strategy) -> None:
+        """Live bot: the day as INDmoney reports it (/funds)."""
+        today = getattr(strategy, "today", None)
+        lines = [f"📊 <b>{day:%a %d %b} {today[0] if today else ''}</b> · INDmoney",
+                 f"Net <b>{inr(fig['net'], True)}</b> (realized {inr(fig['realized'], True)}, "
+                 f"unrealized {inr(fig['unrealized'], True)}, brokerage {inr(fig['brokerage'])}, "
+                 f"charges {inr(fig['charges'])})",
+                 html.escape(getattr(strategy, "note", "") or ""),
+                 f"Available {inr(fig['available'])} · since start {inr(total, True)}"]
+        self._send("\n".join(l for l in lines if l))
+
     def day_summary(self, day: date, row: dict, strategy, initial_capital: float, mirror_stats: str = "") -> None:
         if not row.get("fills"):
             note = getattr(strategy, "note", "") or "no trade"
