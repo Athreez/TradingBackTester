@@ -51,7 +51,8 @@ def live_handler(tmp_path):
     snap = tmp_path / "live.json"
     snap.write_text(json.dumps({"mode": "live", "phase": "trading session", "updated_at": AT.isoformat(),
                                 "day": "2026-11-16", "state": "OPEN", "equity": 999999, "initial_capital": 225000,
-                                "positions": [], "open_orders": [], "indmoney": f}))
+                                "positions": [], "open_orders": [], "indmoney": f,
+                                "start_capital": 225000, "capital": 225800}))
     ind.append(tmp_path, ind.DAILY, ind.daily_row(date(2026, 11, 13), {**f, "net": 800.0}, traded=True))
     return CommandHandler(Controls(tmp_path / "controls.json"), Paths(snap, tmp_path, tmp_path), now=lambda: AT), f
 
@@ -60,7 +61,8 @@ def test_live_pnl_shows_indmoney_figures_only(live_handler):
     h, f = live_handler
     out = h.handle("/pnl")
     assert "INDmoney" in out and "Rs 1,078" in out and "realized +Rs 1,500" in out  # today's net from /funds
-    assert "Since start +Rs 1,878" in out and "Available Rs 61,234" in out
+    assert "Since start +Rs 1,878" in out and "Capital Rs 225,800" in out
+    assert "61,234" not in out  # INDmoney's margin figure is not the capital
     assert "999,999" not in out  # the bot's own equity is never shown
 
 
@@ -95,7 +97,15 @@ def test_dashboard_live_view_uses_indmoney(tmp_path, monkeypatch):
     at.run()
     assert not at.exception
     metrics = {m.label: m.value for m in at.metric}
-    assert metrics["Available balance"] == "₹61,234.50"
+    assert metrics["Capital"] == "₹2,25,800.00"  # 2,25,000 start + the one closed day's net, not INDmoney's margin
     assert metrics["Today's P&L"] == f"+₹{f['net']:,.2f}"
     assert metrics["Total P&L"] == f"+₹{800 + f['net']:,.2f}"
     assert "Equity" not in metrics and all("999" not in v for v in metrics.values())
+
+
+def test_capital_moves_only_with_closed_days(tmp_path):
+    f = ind.figures(FUNDS, POSITIONS, AT)
+    assert ind.capital(tmp_path, 225000) == 225000
+    ind.append(tmp_path, ind.DAILY, ind.daily_row(date(2026, 11, 13), {**f, "net": 1200.0}, traded=True))
+    ind.append(tmp_path, ind.DAILY, ind.daily_row(date(2026, 11, 16), {**f, "net": -450.5}, traded=True))
+    assert ind.capital(tmp_path, 225000) == pytest.approx(225000 + 1200 - 450.5)  # today's running P&L not included

@@ -308,8 +308,10 @@ def dashboard() -> None:
         total = (ind_daily["net"].sum() if not ind_daily.empty else 0.0) + (
             fig["net"] if fig and today not in recorded else 0.0)
         ind_traded = ind_daily[ind_daily["traded"] > 0] if not ind_daily.empty else ind_daily
-        a1.metric("Available balance", inr(fig["available"]) if fig else "–",
-                  help="INDmoney: balance available for selling options")
+        start = float(snap.get("start_capital") or snap["initial_capital"])
+        a1.metric("Capital", inr(start + (ind_daily["net"].sum() if not ind_daily.empty else 0.0)),
+                  help=f"{inr(start)} start (CAPITAL in .env) plus INDmoney's net P&L of each closed day. "
+                       "Updated once a day, after the close; not INDmoney's margin figure.")
         a2.metric("Total P&L", inr(total, signed=True), help="INDmoney: sum of each day's net P&L since the live bot started")
         a3.metric("Today's P&L", inr(fig["net"], signed=True) if fig else "–",
                   help=(f"INDmoney: realized {inr(fig['realized'], True)} + unrealized {inr(fig['unrealized'], True)} "
@@ -416,7 +418,8 @@ def dashboard() -> None:
         if ind_daily.empty:
             st.caption("No completed live sessions yet. INDmoney's figures are recorded at each day's close.")
         else:
-            d = ind_daily.assign(charges=ind_daily["brokerage"] + ind_daily["charges"])
+            d = ind_daily.assign(charges=ind_daily["brokerage"] + ind_daily["charges"],
+                                 capital=float(snap.get("start_capital") or snap["initial_capital"]) + ind_daily["net"].cumsum())
             dt = d[d["traded"] > 0]
             s1, s2, s3, s4 = st.columns(4)
             s1.metric("Net (INDmoney)", inr(d["net"].sum(), signed=True))
@@ -428,14 +431,14 @@ def dashboard() -> None:
                 st.markdown("**Daily P&L (INDmoney)**")
                 st.altair_chart(pnl_bars(d, c), width="stretch")
             with h_right:
-                st.markdown("**Available balance at each close (INDmoney)**")
-                st.altair_chart(line_chart(d, "date", "available", "Day", "%d %b", c, y_title="Available (₹)",
-                                           label="Available"), width="stretch")
+                st.markdown("**Capital at each close**")
+                st.altair_chart(line_chart(d, "date", "capital", "Day", "%d %b", c, y_title="Capital (₹)",
+                                           label="Capital"), width="stretch")
             with st.expander("Daily table (INDmoney)"):
                 st.dataframe(d.assign(date=d["date"].dt.strftime("%a %d %b %Y"))[
-                    ["date", "traded", "realized", "unrealized", "brokerage", "charges", "net", "available"]].rename(columns={
+                    ["date", "traded", "realized", "unrealized", "brokerage", "charges", "net", "capital"]].rename(columns={
                     "date": "Day", "traded": "Traded", "realized": "Realized", "unrealized": "Unrealized",
-                    "brokerage": "Brokerage", "charges": "Brokerage + charges", "net": "Net", "available": "Available"}),
+                    "brokerage": "Brokerage", "charges": "Brokerage + charges", "net": "Net", "capital": "Capital"}),
                     hide_index=True, width="stretch")
             with st.expander("All fills (INDmoney prices)"):
                 st.dataframe(fills.drop(columns=["charges"], errors="ignore").sort_values("ts", ascending=False)

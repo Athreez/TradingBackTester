@@ -164,7 +164,7 @@ class CommandHandler:
                 lines.append(f"{o['side']} {o['symbol']} × {o['qty']} trigger {o.get('trigger')}{lim}")
         if fig:
             lines.append(f"INDmoney today {_inr(fig['net'], True)} (unrealized {_inr(fig['unrealized'], True)}) · "
-                         f"available {_inr(fig['available'])} · as of {fig['at'][11:16]}")
+                         f"capital {_inr(s.get('capital') or 0)} · as of {fig['at'][11:16]}")
         else:
             lines.append(f"Equity {_inr(s.get('equity', 0))}")
         return "\n".join(l for l in lines if l)
@@ -205,7 +205,10 @@ class CommandHandler:
                   f"This month {_inr(since(today.replace(day=1)), True)}",
                   f"Since start {_inr(ind.total_since_start(self.paths.log_dir, fig, today), True)}"]
         if fig:
-            lines.append(f"Available {_inr(fig['available'])} · as of {fig['at'][11:16]}")
+            lines.append(f"as of {fig['at'][11:16]}")
+        if s.get("capital") is not None:
+            lines.append(f"Capital {_inr(s['capital'])} (start {_inr(s.get('start_capital') or 0)} + each closed "
+                         "day's net; updated after the close)")
         return "\n".join(lines)
 
     def cmd_pnl(self, _="") -> str:

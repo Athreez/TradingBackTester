@@ -82,6 +82,13 @@ def read_daily(log_dir: Path) -> list[dict]:
     return [by_day[d] for d in sorted(by_day)]
 
 
+def capital(log_dir: Path, start: float) -> float:
+    """The live account's capital: CAPITAL from .env (e.g. 2,25,000) plus INDmoney's net P&L of every closed
+    day. It changes once a day, after the close; INDmoney's margin figures (which pledges and blocked
+    amounts move around) are not used for it."""
+    return start + sum(_f(r["net"]) for r in read_daily(log_dir))
+
+
 def total_since_start(log_dir: Path, fig: dict | None, today: date) -> float:
     """Sum of INDmoney's daily net P&L, plus today's running figure if today isn't recorded yet."""
     rows = read_daily(log_dir)

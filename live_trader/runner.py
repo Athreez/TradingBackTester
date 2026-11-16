@@ -84,6 +84,7 @@ class LiveBot(PaperBot):
     def _snapshot_extra(self) -> dict:
         b = self.broker
         return {"mode": "live", "mirror": "not used (live trading)", "halted": b.halted, "indmoney": self._indmoney(),
+                "start_capital": self.capital, "capital": ind.capital(self.log_dir, self.capital),
                 "live_orders": [{"tag": b._by_id[s.order_id].tag, "symbol": b._by_id[s.order_id].instrument.symbol,
                                  "side": b._by_id[s.order_id].side.value, "qty": s.qty, "kind": s.kind,
                                  "filled": s.filled, "price": s.avg_price, "done": s.done,
@@ -194,7 +195,8 @@ class LiveBot(PaperBot):
         fig = self._indmoney()
         if fig is None:
             return super()._send_day_summary(today, row)
-        self.notifier.indmoney_day_summary(today, fig, ind.total_since_start(self.log_dir, fig, today), self.strategy)
+        self.notifier.indmoney_day_summary(today, fig, ind.total_since_start(self.log_dir, fig, today), self.strategy,
+                                           capital=ind.capital(self.log_dir, self.capital))  # today's row is in
 
     def _drain_alerts(self) -> None:
         alerts, self.broker.alerts = self.broker.alerts, []

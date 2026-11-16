@@ -106,6 +106,9 @@ messages and commands, but orders go to INDmoney and fills are read back from it
 `LIVE_TRADING_ENABLED=yes` in `.env` and the static IP above. It takes the paper bot's lock, so only one
 of the two runs (they would share one INDmoney login). Journals in `live_trader/logs/` (`orders.csv` and
 `events.csv` record every order sent and every status INDmoney reported), state in `live_trader/state/`.
+P&L shown for the live bot (dashboard Live view, `/status`, `/pnl`, `/history`, day summary) is
+INDmoney's own (`/funds`). **Capital** starts at `CAPITAL` in `.env` (e.g. 2,25,000) and moves once a day,
+after the close, by that day's INDmoney net P&L; INDmoney's margin figures are not used for it.
 
 How orders are handled:
 - Hedges go first; the shorts are sent only once both hedges have filled. If any entry leg fails, nothing
