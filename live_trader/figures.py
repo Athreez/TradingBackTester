@@ -1,6 +1,7 @@
 """INDmoney's own account figures, as the live bot records them for the dashboard and Telegram.
 
-The live bot reads GET /funds (realized / unrealized P&L, brokerage, F&O charges, available balance) and
+The live bot reads GET /funds (realized / unrealized P&L, brokerage, F&O charges, available balance; its
+brokerage and charges are topped up where /funds under-reports them, see figures()) and
 GET /portfolio/positions every 30 s, keeps the latest in its snapshot (`indmoney`), appends the day's
 running P&L to logs/indmoney_intraday.csv and, at the close, one row per day to logs/indmoney_daily.csv.
 Nothing here is the bot's own bookkeeping: these are INDmoney's numbers.
@@ -35,11 +36,21 @@ def position_name(row: dict) -> str:
     return name
 
 
-def figures(funds: dict, positions: list[dict], at: datetime) -> dict:
-    """Today's figures from INDmoney's /funds and /portfolio/positions responses."""
+def figures(funds: dict, positions: list[dict], at: datetime, orders: int = 0, brokerage_per_order: float = 0.0,
+            own_charges: float = 0.0) -> dict:
+    """Today's figures from INDmoney's /funds and /portfolio/positions responses.
+
+    P&L is INDmoney's (realized_pnl is gross: before brokerage and charges). Its charge fields are not
+    trusted on their own: /funds has reported brokerage 0 on a day the app showed Rs 80, and charges a few
+    rupees short. So brokerage is `orders` x `brokerage_per_order` when /funds says 0, and the total of
+    brokerage + charges is never less than the bot's own cost model for today's fills (`own_charges`)."""
     realized, unrealized = _f(funds.get("realized_pnl")), _f(funds.get("unrealized_pnl"))
-    brokerage = _f(funds.get("brokerage"))
-    charges = _f(funds.get("fno_charges")) + _f(funds.get("eq_charges"))
+    api_brokerage = _f(funds.get("brokerage"))
+    api_charges = _f(funds.get("fno_charges")) + _f(funds.get("eq_charges"))
+    brokerage = api_brokerage or orders * brokerage_per_order
+    total = max(brokerage + api_charges, own_charges)
+    charges = total - brokerage
+    estimated = brokerage != api_brokerage or charges != api_charges
     avl = funds.get("detailed_avl_balance") or {}
     return {
         "at": at.isoformat(timespec="seconds"),
@@ -48,6 +59,7 @@ def figures(funds: dict, positions: list[dict], at: datetime) -> dict:
         "funds_added": _f(funds.get("funds_added")),
         "funds_withdrawn": _f(funds.get("funds_withdrawn")),
         "realized": realized, "unrealized": unrealized, "brokerage": brokerage, "charges": charges,
+        "charges_estimated": estimated, "api_brokerage": api_brokerage, "api_charges": api_charges,
         "net": realized + unrealized - brokerage - charges,
         "positions": [{"contract": position_name(p), "qty": int(_f(p.get("net_qty"))), "avg_price": _f(p.get("avg_price")),
                        "buy_qty": int(_f(p.get("buy_qty"))), "buy_avg": _f(p.get("buy_avg")),

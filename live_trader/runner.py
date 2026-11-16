@@ -53,7 +53,12 @@ class LiveBot(PaperBot):
             return self._ind
         self._ind_at = now  # also after a failure: don't retry on every poll
         try:
-            self._ind = ind.figures(self.client.funds() or {}, self.client.positions(), now)
+            b = getattr(self, "broker", None)
+            today = [f for f in (b.fills() if b else []) if f.ts.date() == now.date()]
+            orders = len({f.order_id for f in today if not f.tag.startswith("expiry-settlement")})
+            self._ind = ind.figures(self.client.funds() or {}, self.client.positions(), now, orders=orders,
+                                    brokerage_per_order=self.costs.brokerage_per_order,
+                                    own_charges=sum(f.charges for f in today))
         except Exception as e:  # informational only: never let it disturb trading
             log.warning("could not read INDmoney's funds/positions: %s", e)
             return self._ind

@@ -30,6 +30,18 @@ def test_figures_are_indmoneys_numbers():
     assert f["positions"][0]["qty"] == -65 and f["positions"][1]["realized"] == -1495
 
 
+def test_charges_topped_up_when_funds_under_reports():
+    """16 Nov: /funds said brokerage 0, charges 47.91; the app showed 80 and 51.21 for 8 orders."""
+    funds = {"realized_pnl": -4231.5, "unrealized_pnl": 0, "brokerage": 0, "eq_charges": 47.91, "fno_charges": 0}
+    f = ind.figures(funds, [], AT, orders=8, brokerage_per_order=10, own_charges=131.41)
+    assert f["brokerage"] == 80 and f["charges"] == pytest.approx(51.41) and f["charges_estimated"]
+    assert f["net"] == pytest.approx(-4231.5 - 131.41)
+    # INDmoney's own figures win when they are complete
+    funds_ok = {**funds, "brokerage": 80, "eq_charges": 60}
+    g = ind.figures(funds_ok, [], AT, orders=8, brokerage_per_order=10, own_charges=131.41)
+    assert g["brokerage"] == 80 and g["charges"] == 60 and not g["charges_estimated"]
+
+
 def test_figures_tolerate_missing_fields():
     f = ind.figures({}, [{"security_id": "9", "net_qty": "5"}], AT)
     assert f["net"] == 0 and f["positions"][0]["contract"] == "9" and f["positions"][0]["qty"] == 5
