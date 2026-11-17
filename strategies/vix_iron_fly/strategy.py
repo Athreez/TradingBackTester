@@ -68,6 +68,13 @@ class VixIronFly(Strategy):
         self.schedule: dict[str, dict] = params["schedule"]
         # Trade only when the chosen expiry is at most this many calendar days away (null = any).
         self.max_dte = params.get("max_days_to_expiry")
+        # Optional stop-loss by calendar days to expiry, e.g. {0: 40, 1: 30}: overrides stop_loss_pct and the
+        # VIX regimes' stop on those days (a VIX no-trade band still applies). null = off.
+        self.dte_sl = {int(k): float(v) for k, v in (params.get("dte_stop_loss_pct") or {}).items()}
+        # Days to expiry on which the VIX rule (vix_min / vix_max / vix_regimes) applies, e.g. [1]; on other
+        # days the trade goes ahead whatever VIX is. null = every day.
+        vix_days = params.get("vix_rule_days")
+        self.vix_days = None if vix_days is None else {int(d) for d in vix_days}
         self._day: date | None = None
 
     def _pick_underlying(self, ctx: Context, today: date) -> tuple[str, dict] | None:
@@ -200,13 +207,14 @@ class VixIronFly(Strategy):
         underlying, cfg = self.today
         self.state = "DONE"  # unless every leg is found below
 
+        dte = (min(e for e in ctx.data.expiries(underlying) if e >= self._day) - self._day).days
         if self.max_dte is not None:
-            dte = (min(e for e in ctx.data.expiries(underlying) if e >= self._day) - self._day).days
             if dte > self.max_dte:
                 self.note = f"{underlying} expiry is {dte} days away (max {self.max_dte}), no trade"
                 return
 
-        if self.vix_min is not None or self.vix_max is not None or self.vix_regimes:
+        if (self.vix_min is not None or self.vix_max is not None or self.vix_regimes) and (
+                self.vix_days is None or dte in self.vix_days):
             vix = self.day_vix = ctx.data.index_value("INDIAVIX")
             if vix is None:
                 log.warning("%s: no India VIX data, skipping day", self._day)
@@ -224,6 +232,8 @@ class VixIronFly(Strategy):
                     self.note = f"VIX {vix:.2f} is in the no-trade band, no trade"
                     return
                 self.day_sl_pct = float(regime["stop_loss_pct"]) / 100
+        if dte in self.dte_sl:
+            self.day_sl_pct = self.dte_sl[dte] / 100
 
         spot = ctx.data.spot(underlying)
         expiries = ctx.data.expiries(underlying)

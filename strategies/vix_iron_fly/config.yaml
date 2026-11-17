@@ -34,6 +34,8 @@ params:
     chase_after_minutes: 1
   skip_expiry_day: false     # expiry days are traded
   max_days_to_expiry: null   # e.g. 1 = trade only on expiry day and the day before (calendar days)
+  dte_stop_loss_pct: null    # e.g. {0: 40, 1: 30} = 40% stop on expiry day, 30% the day before (overrides VIX's)
+  vix_rule_days: null        # e.g. [1] = VIX rule only the day before expiry; other days trade regardless of VIX
   # India VIX at entry picks the day's stop-loss; VIX in 11..14 -> no trade.
   vix_regimes:
     - {vix_below: 11, stop_loss_pct: 40}

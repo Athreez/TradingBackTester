@@ -233,3 +233,20 @@ def test_gtt_stop_limit_chases_at_market_when_price_gaps_past_limit(store):
     assert sl.ts == at("10:31") and sl.price == pytest.approx(200 * 1.0005)  # market buy, a bar after triggering
     assert fills[("hedge-exit:CE", "NIFTY25SEP0924400CE")].ts == at("10:32")
     assert len(result.fills) == 8 and result.broker.positions() == {}
+
+
+@pytest.mark.parametrize("dte_sl, mult", [({1: 20}, 1.2), ({0: 20}, 1.5)])  # DAY is 1 day before expiry
+def test_stop_loss_by_days_to_expiry(store, dte_sl, mult):
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "on_stop_loss": "exit_side", "dte_stop_loss_pct": dte_sl})
+    fills = {(f.tag, f.instrument.symbol): f for f in result.fills}
+    short_ce = fills[("short:CE", "NIFTY25SEP0924000CE")].price
+    assert fills[("sl:CE", "NIFTY25SEP0924000CE")].price == pytest.approx(round(short_ce * mult, 2) * 1.0005)
+
+
+@pytest.mark.parametrize("vix_days, traded", [(None, False), ([0], True), ([1], False), ([0, 2], True)])
+def test_vix_rule_only_on_listed_days(store, vix_days, traded):
+    """DAY is 1 day before expiry and has no VIX data: the VIX rule blocks the trade only where it applies."""
+    result = run_backtest("vix_iron_fly", date(2025, 9, 8), date(2025, 9, 8), store=store,
+                          overrides={**BASE, "vix_min": 10, "vix_rule_days": vix_days})
+    assert bool(result.fills) is traded

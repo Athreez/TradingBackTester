@@ -5,6 +5,7 @@ Usage:
       --param stop_loss_pct=30,40,50,60 [--set skip_expiry_day=false] [--label name]
   python -m backtester.sweep ... --param schedule.NIFTY.lots,schedule.SENSEX.lots=1,2,5
       (several comma-separated keys before '=' all get the same value)
+  python -m backtester.sweep ... --data-root data/cache/hf_store   (another DataStore, e.g. data.import_hf's)
 
 Prints a comparison table and saves it to reports/sweep_<strategy>_<timestamp>_<label>.csv.
 """
@@ -15,6 +16,7 @@ import os
 import re
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date, datetime
+from pathlib import Path
 
 import pandas as pd
 import yaml
@@ -23,6 +25,7 @@ from backtester.metrics import summarize
 from backtester.run import run_backtest
 from core.config import ROOT
 from core.models import Side
+from data.store import DataStore
 
 
 def daily_net(result) -> pd.Series:
@@ -33,8 +36,9 @@ def daily_net(result) -> pd.Series:
 
 
 def _run_one(job: tuple) -> dict:
-    strategy, start, end, overrides, key, value = job
-    result = run_backtest(strategy, start, end, overrides={**overrides, **{k: value for k in key.split(",")}})
+    strategy, start, end, overrides, key, value, data_root = job
+    result = run_backtest(strategy, start, end, store=DataStore(data_root) if data_root else None,
+                          overrides={**overrides, **{k: value for k in key.split(",")}})
     s = summarize(result)
     daily = daily_net(result)
     by_dow = daily.groupby(pd.to_datetime(daily.index).day_name().str[:3]).sum()
@@ -61,6 +65,7 @@ def main() -> None:
     p.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
     p.add_argument("--label", default="")
     p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    p.add_argument("--data-root", type=Path, help="DataStore folder instead of data/cache (e.g. data/cache/hf_store)")
     args = p.parse_args()
 
     key, _, values = args.param.partition("=")
@@ -68,7 +73,8 @@ def main() -> None:
     for item in args.overrides:
         k, _, v = item.partition("=")
         overrides[k.strip()] = yaml.safe_load(v)
-    jobs = [(args.strategy, args.start, args.end, overrides, key, yaml.safe_load(v)) for v in values.split(",")]
+    jobs = [(args.strategy, args.start, args.end, overrides, key, yaml.safe_load(v), args.data_root)
+            for v in values.split(",")]
 
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         table = pd.DataFrame(list(pool.map(_run_one, jobs)))
